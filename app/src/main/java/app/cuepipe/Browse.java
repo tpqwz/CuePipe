@@ -69,9 +69,61 @@ public final class Browse {
     }
 
     public static Session feed(StreamingService service) throws Exception {
-        // KioskInfo.getInfo calls getName(), and YouTube's kiosk name parser
-        // NPEs when the channel response is missing. The item page itself is fine.
-        KioskExtractor extractor = service.getKioskList().getDefaultKioskExtractor();
+        // YouTube removed the combined Trending tab. The charts that replaced it
+        // are music, movies, and gaming. Live is the fallback when those are absent.
+        // KioskInfo.getInfo calls getName(), which NPEs on some kiosks, so the
+        // item page is fetched directly.
+        org.schabi.newpipe.extractor.kiosk.KioskList kiosks = service.getKioskList();
+        java.util.Set<String> available = kiosks.getAvailableKiosks();
+        List<String> ids = new ArrayList<>();
+        for (String id : new String[] {
+                "trending_music", "trending_movies_and_shows", "trending_gaming"}) {
+            if (available.contains(id)) {
+                ids.add(id);
+            }
+        }
+        if (ids.isEmpty()) {
+            ids.add(kiosks.getDefaultKioskId());
+        }
+        List<Found> items = new ArrayList<>();
+        String url = null;
+        Page next = null;
+        Exception last = null;
+        boolean single = ids.size() == 1;
+        for (String id : ids) {
+            try {
+                KioskExtractor extractor = kiosks.getExtractorById(id, null);
+                extractor.fetchPage();
+                ListExtractor.InfoItemsPage<?> page = extractor.getInitialPage();
+                List<Found> found = fromItems(page.getItems());
+                if (found.isEmpty()) {
+                    continue;
+                }
+                items.addAll(found);
+                if (url == null) {
+                    url = extractor.getUrl();
+                    if (single) {
+                        next = page.getNextPage();
+                    }
+                }
+            } catch (Exception e) {
+                last = e;
+            }
+        }
+        if (items.isEmpty() && !single) {
+            return feedOne(service, kiosks.getDefaultKioskId());
+        }
+        if (items.isEmpty()) {
+            if (last != null) {
+                throw last;
+            }
+            throw new java.io.IOException("no feed");
+        }
+        return new Session(items, next, service.getServiceId(), "feed", null, url, null);
+    }
+
+    private static Session feedOne(StreamingService service, String id) throws Exception {
+        KioskExtractor extractor = service.getKioskList().getExtractorById(id, null);
         extractor.fetchPage();
         ListExtractor.InfoItemsPage<?> page = extractor.getInitialPage();
         return new Session(fromItems(page.getItems()), page.getNextPage(), service.getServiceId(),

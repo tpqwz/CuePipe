@@ -100,6 +100,8 @@ public final class MainActivity extends AppCompatActivity {
     private boolean followLines = true;
     private int followed = -1;
     private boolean triedFresh;
+    private boolean prose;
+    private List<Prose.Block> blocks = Collections.emptyList();
     private final Runnable playTick = new Runnable() {
         @Override
         public void run() {
@@ -215,6 +217,16 @@ public final class MainActivity extends AppCompatActivity {
         lines.setOnItemClickListener((parent, view, position, id) -> {
             if (relatedMode) {
                 openRelated(position);
+            } else if (prose && position >= 0 && position < blocks.size()) {
+                followLines = true;
+                followed = -1;
+                int t0 = blocks.get(position).t0;
+                if (player.getMediaItemCount() > 0
+                        && player.getPlaybackState() != Player.STATE_IDLE) {
+                    seek(t0);
+                } else {
+                    jump(t0);
+                }
             } else if (position >= 0 && position < spans.size()) {
                 followLines = true;
                 followed = -1;
@@ -243,7 +255,17 @@ public final class MainActivity extends AppCompatActivity {
             View block = findViewById(R.id.details_block);
             block.setVisibility(block.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
         });
+        ((CheckBox) findViewById(R.id.prose)).setOnCheckedChangeListener((button, checked) -> {
+            prose = checked;
+            if (!relatedMode) {
+                render();
+            }
+        });
         lines.setOnItemLongClickListener((parent, view, position, id) -> {
+            if (prose && !relatedMode) {
+                status.setText("Switch off Paragraphs to edit one cue");
+                return true;
+            }
             if (!relatedMode) {
                 editLine(position);
             }
@@ -377,7 +399,10 @@ public final class MainActivity extends AppCompatActivity {
             for (int attempt = 0; attempt < 3; attempt++) {
                 try {
                     Browse.Session session = Browse.feed(service);
-                    String label = service.getServiceInfo().getName();
+                    String page = session.listUrl == null ? "" : session.listUrl;
+                    String label = page.contains("charts.youtube.com")
+                            || page.contains("/gaming/trending")
+                            ? "Trending" : service.getServiceInfo().getName();
                     runOnUiThread(() -> {
                         exploreBack = Collections.emptyList();
                         showSession(session, label);
@@ -1369,7 +1394,8 @@ public final class MainActivity extends AppCompatActivity {
             extras.add(Shelf.readSpans(db, tracks.get(s).id));
         }
         this.extras = extras;
-        lines.setAdapter(new LineAdapter(spans, extras));
+        blocks = prose ? Prose.blocks(spans) : Collections.emptyList();
+        lines.setAdapter(new LineAdapter(spans, extras, blocks));
         followed = -1;
         followTranscript();
         paintOnScreen();
@@ -1396,7 +1422,8 @@ public final class MainActivity extends AppCompatActivity {
         if (!videoOpen || relatedMode || spans.isEmpty() || lines.getAdapter() == null) {
             return;
         }
-        int at = Cues.indexAt(spans, (int) player.getCurrentPosition());
+        int spanAt = Cues.indexAt(spans, (int) player.getCurrentPosition());
+        int at = prose ? Prose.blockAt(blocks, spanAt) : spanAt;
         if (at < 0) {
             return;
         }
@@ -1454,8 +1481,12 @@ public final class MainActivity extends AppCompatActivity {
                 status.setText("No hit");
                 return;
             }
-            lines.setItemChecked(index, true);
-            lines.smoothScrollToPosition(index);
+            int show = prose ? Prose.blockAt(blocks, index) : index;
+            if (show < 0) {
+                show = 0;
+            }
+            lines.setItemChecked(show, true);
+            lines.smoothScrollToPosition(show);
             seek(spans.get(index).t0);
         } catch (RuntimeException e) {
             status.setText(e.getMessage());
@@ -1776,18 +1807,22 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private final class LineAdapter extends BaseAdapter {
-        private static final int[] LINE_IDS = {R.id.line_0, R.id.line_1, R.id.line_2, R.id.line_3};
+        private static final int[] LINE_IDS = {
+                R.id.line_0, R.id.line_1, R.id.line_2, R.id.line_3, R.id.line_4
+        };
         private final List<Cues.Span> primarySpans;
         private final List<List<Cues.Span>> extras;
+        private final List<Prose.Block> blocks;
 
-        LineAdapter(List<Cues.Span> primarySpans, List<List<Cues.Span>> extras) {
+        LineAdapter(List<Cues.Span> primarySpans, List<List<Cues.Span>> extras, List<Prose.Block> blocks) {
             this.primarySpans = primarySpans;
             this.extras = extras;
+            this.blocks = blocks;
         }
 
         @Override
         public int getCount() {
-            return primarySpans.size();
+            return blocks.isEmpty() ? primarySpans.size() : blocks.size();
         }
 
         @Override
@@ -1805,8 +1840,27 @@ public final class MainActivity extends AppCompatActivity {
             View row = convert == null
                     ? getLayoutInflater().inflate(R.layout.line, parent, false)
                     : convert;
-            Cues.Span span = primarySpans.get(position);
             TextView first = row.findViewById(LINE_IDS[0]);
+            if (!blocks.isEmpty()) {
+                Prose.Block block = blocks.get(position);
+                first.setText(stamp(block.t0));
+                TextView body = row.findViewById(LINE_IDS[1]);
+                body.setText(block.text);
+                body.setTextAppearance(android.R.style.TextAppearance_Medium);
+                body.setVisibility(View.VISIBLE);
+                for (int i = 2; i < LINE_IDS.length; i++) {
+                    TextView extra = row.findViewById(LINE_IDS[i]);
+                    String text = "";
+                    if (i - 2 < extras.size()) {
+                        text = Prose.nested(extras.get(i - 2), block.t0, block.t1);
+                    }
+                    extra.setText(text);
+                    extra.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
+                }
+                return row;
+            }
+            first.setTextAppearance(android.R.style.TextAppearance_Medium);
+            Cues.Span span = primarySpans.get(position);
             first.setText(stamp(span.t0) + "  " + span.text);
             for (int i = 1; i < LINE_IDS.length; i++) {
                 TextView view = row.findViewById(LINE_IDS[i]);
@@ -1817,6 +1871,7 @@ public final class MainActivity extends AppCompatActivity {
                         text = extras.get(i - 1).get(at).text;
                     }
                 }
+                view.setTextAppearance(android.R.style.TextAppearance_Small);
                 view.setText(text);
                 view.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
             }
