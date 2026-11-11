@@ -132,6 +132,25 @@ public final class ShelfFtsTest {
         c.close();
     }
 
+    @Test
+    public void followKeepsAChannel() throws Exception {
+        Connection c = DriverManager.getConnection("jdbc:sqlite::memory:");
+        JdbcSql db = new JdbcSql(c);
+        for (String sql : Shelf.SCHEMA) {
+            db.exec(sql);
+        }
+        Shelf.bookmark(db, "channel", "YouTube", "https://example.test/c", "Example");
+        assertEquals(false, Shelf.followed(db, "https://example.test/c"));
+        Shelf.follow(db, "YouTube", "https://example.test/c", "Example", true);
+        assertEquals(true, Shelf.followed(db, "https://example.test/c"));
+        assertEquals(1, Shelf.follows(db).size());
+        assertEquals(1, Shelf.checkRows(db).size());
+        Shelf.follow(db, "YouTube", "https://example.test/c", "Example", false);
+        assertEquals(false, Shelf.followed(db, "https://example.test/c"));
+        assertEquals(0, Shelf.checkRows(db).size());
+        c.close();
+    }
+
     /** JDBC stand-in for the Android SQLite binding. */
     private static final class JdbcSql implements Shelf.Sql, Shelf.SqlRows {
         private final Connection c;

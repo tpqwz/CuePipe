@@ -86,7 +86,8 @@ public final class Shelf {
                     + "kind TEXT NOT NULL,"
                     + "service TEXT NOT NULL,"
                     + "url TEXT NOT NULL UNIQUE,"
-                    + "name TEXT NOT NULL)";
+                    + "name TEXT NOT NULL,"
+                    + "follow INTEGER NOT NULL DEFAULT 0)";
 
     public static final String[] SCHEMA = {
             "CREATE TABLE channel ("
@@ -455,6 +456,31 @@ public final class Shelf {
         return db.text("SELECT id FROM bookmark WHERE url=?", url) != null;
     }
 
+    /** A followed channel. Check fetches its new videos. */
+    public static void follow(Sql db, String service, String url, String name, boolean on) {
+        if (url == null || url.isEmpty()) {
+            return;
+        }
+        bookmark(db, "channel", service, url, name);
+        db.exec("UPDATE bookmark SET follow=? WHERE url=?", on ? 1 : 0, url);
+    }
+
+    public static boolean followed(Sql db, String url) {
+        return "1".equals(db.text("SELECT follow FROM bookmark WHERE url=?", url));
+    }
+
+    public static List<String[]> follows(SqlRows rows) {
+        return rows.rows(
+                "SELECT kind, service, url, name FROM bookmark WHERE follow=1 ORDER BY name");
+    }
+
+    /** Playlists you saved, and channels you follow. */
+    public static List<String[]> checkRows(SqlRows rows) {
+        return rows.rows(
+                "SELECT kind, service, url, name FROM bookmark "
+                        + "WHERE kind='playlist' OR follow=1 ORDER BY id DESC");
+    }
+
     public static boolean known(Sql db, String url) {
         return db.text("SELECT id FROM video WHERE url=?", url) != null;
     }
@@ -505,7 +531,7 @@ public final class Shelf {
 
     private static final class Db extends SQLiteOpenHelper {
         Db(Context context) {
-            super(context, "cuepipe.db", null, 6);
+            super(context, "cuepipe.db", null, 7);
         }
 
         @Override
@@ -519,6 +545,10 @@ public final class Shelf {
         public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
             if (oldVersion < 2) {
                 db.execSQL(BOOKMARK_SQL);
+            }
+            if (oldVersion >= 2 && oldVersion < 7) {
+                db.execSQL("ALTER TABLE bookmark ADD COLUMN follow INTEGER NOT NULL DEFAULT 0");
+                db.execSQL("UPDATE bookmark SET follow=1 WHERE kind='channel'");
             }
             if (oldVersion < 3) {
                 db.execSQL("ALTER TABLE video ADD COLUMN local_path TEXT NOT NULL DEFAULT ''");

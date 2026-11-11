@@ -279,6 +279,7 @@ public final class MainActivity extends AppCompatActivity {
             return true;
         });
         findViewById(R.id.channel).setOnClickListener(v -> openChannel());
+        findViewById(R.id.follow).setOnClickListener(v -> toggleFollow());
         findViewById(R.id.drawer_home).setOnClickListener(v -> {
             closeDrawer();
             fillExploreServices();
@@ -297,6 +298,11 @@ public final class MainActivity extends AppCompatActivity {
             closeDrawer();
             showTab(0);
             showBookmarks();
+        });
+        findViewById(R.id.drawer_follows).setOnClickListener(v -> {
+            closeDrawer();
+            showTab(0);
+            showFollows();
         });
         findViewById(R.id.drawer_check).setOnClickListener(v -> {
             closeDrawer();
@@ -723,10 +729,7 @@ public final class MainActivity extends AppCompatActivity {
         exploreStatus.setText("Checking");
         io.execute(() -> {
             List<Browse.Found> fresh = new ArrayList<>();
-            for (String[] row : Shelf.bookmarkRows(db)) {
-                if (!"channel".equals(row[0]) && !"playlist".equals(row[0])) {
-                    continue;
-                }
+            for (String[] row : Shelf.checkRows(db)) {
                 try {
                     StreamingService service = NewPipe.getServiceByUrl(row[2]);
                     Browse.Session session = "playlist".equals(row[0])
@@ -782,6 +785,36 @@ public final class MainActivity extends AppCompatActivity {
         exploreBack = new ArrayList<>(exploreRows);
         exploreSession = null;
         showExplore(rows, "Bookmarks");
+    }
+
+    private void showFollows() {
+        List<Browse.Found> rows = new ArrayList<>();
+        for (String[] row : Shelf.follows(db)) {
+            rows.add(new Browse.Found(row[0], row[3], row[2], row[1]));
+        }
+        exploreBack = new ArrayList<>(exploreRows);
+        exploreSession = null;
+        showExplore(rows, "Subscriptions");
+    }
+
+    private void toggleFollow() {
+        Shelf.Video video = Shelf.video(db, videoId);
+        String url = Shelf.channelUrl(db, videoId);
+        if (video == null || url.isEmpty()) {
+            status.setText("This channel has no page");
+            return;
+        }
+        boolean on = !Shelf.followed(db, url);
+        Shelf.follow(db, video.service, url, video.channel, on);
+        status.setText(on ? "Following" : "Unfollowed");
+        paintFollow();
+    }
+
+    private void paintFollow() {
+        Button follow = findViewById(R.id.follow);
+        String url = Shelf.channelUrl(db, videoId);
+        follow.setText(!url.isEmpty() && Shelf.followed(db, url)
+                ? R.string.following : R.string.follow);
     }
 
     private void openExplore(int position) {
@@ -1305,6 +1338,7 @@ public final class MainActivity extends AppCompatActivity {
         title.setText(heading);
         status.setText("");
         ((Button) findViewById(R.id.channel)).setText(video.channel);
+        paintFollow();
         relatedMode = false;
         related = Collections.emptyList();
         description.setText("");
