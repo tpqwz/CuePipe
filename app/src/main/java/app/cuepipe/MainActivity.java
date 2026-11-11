@@ -65,7 +65,7 @@ public final class MainActivity extends AppCompatActivity {
     private View panelWatch;
     private View panelExplore;
     private View panelDownloads;
-    private com.google.android.material.bottomnavigation.BottomNavigationView bottom;
+    private androidx.drawerlayout.widget.DrawerLayout drawer;
     private ListView downloadsView;
     private TextView downloadsStatus;
     private List<Shelf.Video> keptVideos = Collections.emptyList();
@@ -131,7 +131,14 @@ public final class MainActivity extends AppCompatActivity {
         panelWatch = findViewById(R.id.panel_watch);
         panelExplore = findViewById(R.id.panel_explore);
         panelDownloads = findViewById(R.id.panel_downloads);
-        bottom = findViewById(R.id.bottom);
+        drawer = findViewById(R.id.drawer);
+        com.google.android.material.appbar.MaterialToolbar toolbar = findViewById(R.id.toolbar);
+        androidx.appcompat.app.ActionBarDrawerToggle toggle =
+                new androidx.appcompat.app.ActionBarDrawerToggle(
+                        this, drawer, toolbar, R.string.menu_open, R.string.menu_close);
+        drawer.addDrawerListener(toggle);
+        toggle.syncState();
+        toggle.getDrawerArrowDrawable().setColor(android.graphics.Color.WHITE);
         downloadsView = findViewById(R.id.downloads);
         downloadsStatus = findViewById(R.id.downloads_status);
         exploreList = findViewById(R.id.explore);
@@ -272,20 +279,29 @@ public final class MainActivity extends AppCompatActivity {
             return true;
         });
         findViewById(R.id.channel).setOnClickListener(v -> openChannel());
-        bottom.setOnItemSelectedListener(item -> {
-            if (filling) {
-                return true;
-            }
-            int itemId = item.getItemId();
-            if (itemId == R.id.nav_home) {
-                fillExploreServices();
-                showTab(0);
-            } else if (itemId == R.id.nav_library) {
-                showTab(1);
-            } else if (itemId == R.id.nav_downloads) {
-                showTab(2);
-            }
-            return true;
+        findViewById(R.id.drawer_home).setOnClickListener(v -> {
+            closeDrawer();
+            fillExploreServices();
+            showTab(0);
+            loadFeed();
+        });
+        findViewById(R.id.drawer_library).setOnClickListener(v -> {
+            closeDrawer();
+            showTab(1);
+        });
+        findViewById(R.id.drawer_downloads).setOnClickListener(v -> {
+            closeDrawer();
+            showTab(2);
+        });
+        findViewById(R.id.drawer_marks).setOnClickListener(v -> {
+            closeDrawer();
+            showTab(0);
+            showBookmarks();
+        });
+        findViewById(R.id.drawer_check).setOnClickListener(v -> {
+            closeDrawer();
+            showTab(0);
+            checkFeed();
         });
         downloadsView.setOnItemClickListener((parent, view, position, id) -> {
             if (position < 0 || position >= keptVideos.size()) {
@@ -298,6 +314,10 @@ public final class MainActivity extends AppCompatActivity {
             @Override
             public void handleOnBackPressed() {
                 View focus = getCurrentFocus();
+                if (drawer.isDrawerOpen(androidx.core.view.GravityCompat.START)) {
+                    drawer.closeDrawer(androidx.core.view.GravityCompat.START);
+                    return;
+                }
                 if (focus instanceof EditText) {
                     android.view.inputmethod.InputMethodManager imm =
                             (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
@@ -320,9 +340,7 @@ public final class MainActivity extends AppCompatActivity {
             exploreSearch();
             return true;
         });
-        findViewById(R.id.explore_marks).setOnClickListener(v -> showBookmarks());
         findViewById(R.id.explore_more).setOnClickListener(v -> more());
-        findViewById(R.id.explore_check).setOnClickListener(v -> checkFeed());
         findViewById(R.id.keep).setOnClickListener(v -> keep());
         findViewById(R.id.burned).setOnClickListener(v -> burned());
         findViewById(R.id.translate).setOnClickListener(v -> translate());
@@ -457,12 +475,10 @@ public final class MainActivity extends AppCompatActivity {
         panelLibrary.setVisibility(!videoOpen && section == 1 ? View.VISIBLE : View.GONE);
         panelDownloads.setVisibility(!videoOpen && section == 2 ? View.VISIBLE : View.GONE);
         panelWatch.setVisibility(videoOpen ? View.VISIBLE : View.GONE);
-        int nav = section == 1 ? R.id.nav_library : section == 2 ? R.id.nav_downloads : R.id.nav_home;
-        if (bottom.getSelectedItemId() != nav) {
-            filling = true;
-            bottom.setSelectedItemId(nav);
-            filling = false;
-        }
+    }
+
+    private void closeDrawer() {
+        drawer.closeDrawer(androidx.core.view.GravityCompat.START);
     }
 
     private void reloadDownloads() {

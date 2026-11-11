@@ -8,6 +8,9 @@
     <string name="clear">Clear</string>
     <string name="no_track">None</string>
     <string name="on_screen">On screen</string>
+    <string name="menu_open">Menu</string>
+    <string name="menu_close">Close</string>
+    <string name="service">Service</string>
     <string name="tab_home">Home</string>
     <string name="tab_library">Library</string>
     <string name="tab_downloads">Downloads</string>
