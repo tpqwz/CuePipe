@@ -31,15 +31,22 @@ public final class Shelf {
         public final String playUrl;
         public final String pageUrl;
         public final String service;
+        public final String thumb;
 
         public Video(long id, String title, String channel, String playUrl, String pageUrl,
                      String service) {
+            this(id, title, channel, playUrl, pageUrl, service, "");
+        }
+
+        public Video(long id, String title, String channel, String playUrl, String pageUrl,
+                     String service, String thumb) {
             this.id = id;
             this.title = title;
             this.channel = channel;
             this.playUrl = playUrl;
             this.pageUrl = pageUrl;
             this.service = service;
+            this.thumb = thumb == null ? "" : thumb;
         }
     }
 
@@ -98,6 +105,7 @@ public final class Shelf {
                     + "url TEXT NOT NULL,"
                     + "play_url TEXT NOT NULL,"
                     + "local_path TEXT NOT NULL DEFAULT '',"
+                    + "thumb TEXT NOT NULL DEFAULT '',"
                     + "UNIQUE(service, key))",
             "CREATE TABLE track ("
                     + "id INTEGER PRIMARY KEY,"
@@ -264,7 +272,12 @@ public final class Shelf {
                 channel == null ? "" : channel,
                 db.text("SELECT play_url FROM video WHERE id=?", id),
                 db.text("SELECT url FROM video WHERE id=?", id),
-                db.text("SELECT service FROM video WHERE id=?", id));
+                db.text("SELECT service FROM video WHERE id=?", id),
+                db.text("SELECT thumb FROM video WHERE id=?", id));
+    }
+
+    public static void setThumb(Sql db, long videoId, String thumb) {
+        db.exec("UPDATE video SET thumb=? WHERE id=?", thumb == null ? "" : thumb, videoId);
     }
 
     public static final String TRACKS_SQL =
@@ -334,7 +347,7 @@ public final class Shelf {
             order = "video.id DESC";
         }
         String sql = "SELECT video.id, video.title, channel.name, video.service, "
-                + "video.play_url, video.url FROM video "
+                + "video.play_url, video.url, video.thumb FROM video "
                 + "JOIN channel ON channel.id = video.channel_id"
                 + (filter ? " WHERE video.service=?" : "")
                 + " ORDER BY " + order;
@@ -342,20 +355,20 @@ public final class Shelf {
         List<Video> out = new ArrayList<>();
         for (String[] row : raw) {
             out.add(new Video(
-                    Long.parseLong(row[0]), row[1], row[2], row[4], row[5], row[3]));
+                    Long.parseLong(row[0]), row[1], row[2], row[4], row[5], row[3], row[6]));
         }
         return out;
     }
 
     public static List<Video> kept(SqlRows rows) {
         String sql = "SELECT video.id, video.title, channel.name, video.service, "
-                + "video.play_url, video.url FROM video "
+                + "video.play_url, video.url, video.thumb FROM video "
                 + "JOIN channel ON channel.id = video.channel_id "
                 + "WHERE video.local_path != '' ORDER BY video.id DESC";
         List<Video> out = new ArrayList<>();
         for (String[] row : rows.rows(sql)) {
             out.add(new Video(
-                    Long.parseLong(row[0]), row[1], row[2], row[4], row[5], row[3]));
+                    Long.parseLong(row[0]), row[1], row[2], row[4], row[5], row[3], row[6]));
         }
         return out;
     }
@@ -466,7 +479,7 @@ public final class Shelf {
 
     private static final class Db extends SQLiteOpenHelper {
         Db(Context context) {
-            super(context, "cuepipe.db", null, 4);
+            super(context, "cuepipe.db", null, 5);
         }
 
         @Override
@@ -489,6 +502,9 @@ public final class Shelf {
             }
             if (oldVersion < 4) {
                 db.execSQL("ALTER TABLE channel ADD COLUMN url TEXT NOT NULL DEFAULT ''");
+            }
+            if (oldVersion < 5) {
+                db.execSQL("ALTER TABLE video ADD COLUMN thumb TEXT NOT NULL DEFAULT ''");
             }
         }
 

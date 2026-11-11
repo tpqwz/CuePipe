@@ -58,9 +58,7 @@ public final class MainActivity extends AppCompatActivity {
     private View panelWatch;
     private View panelExplore;
     private View panelDownloads;
-    private Button tabHome;
-    private Button tabLibrary;
-    private Button tabDownloads;
+    private com.google.android.material.bottomnavigation.BottomNavigationView bottom;
     private ListView downloadsView;
     private TextView downloadsStatus;
     private List<Shelf.Video> keptVideos = Collections.emptyList();
@@ -77,6 +75,10 @@ public final class MainActivity extends AppCompatActivity {
     private List<StreamingService> exploreServices = Collections.emptyList();
     private String playUrl = "";
     private boolean libraryHits;
+    private boolean relatedMode;
+    private TextView description;
+    private View lineSearch;
+    private List<Browse.Found> related = Collections.emptyList();
     private List<Shelf.Video> shelfVideos = Collections.emptyList();
     private List<Shelf.Hit> hits = Collections.emptyList();
     private CheckBox onScreen;
@@ -115,9 +117,7 @@ public final class MainActivity extends AppCompatActivity {
         panelWatch = findViewById(R.id.panel_watch);
         panelExplore = findViewById(R.id.panel_explore);
         panelDownloads = findViewById(R.id.panel_downloads);
-        tabHome = findViewById(R.id.tab_home);
-        tabLibrary = findViewById(R.id.tab_library);
-        tabDownloads = findViewById(R.id.tab_downloads);
+        bottom = findViewById(R.id.bottom);
         downloadsView = findViewById(R.id.downloads);
         downloadsStatus = findViewById(R.id.downloads_status);
         exploreList = findViewById(R.id.explore);
@@ -140,6 +140,8 @@ public final class MainActivity extends AppCompatActivity {
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(this).setDataSourceFactory(http))
                 .build();
         playerView.setPlayer(player);
+        playerView.setFocusable(false);
+        playerView.setFocusableInTouchMode(false);
         burn = findViewById(R.id.burn);
         onScreen = findViewById(R.id.on_screen);
         onScreen.setOnCheckedChangeListener((button, checked) -> {
@@ -169,18 +171,54 @@ public final class MainActivity extends AppCompatActivity {
 
         fetch.setOnClickListener(v -> fetch(url.getText().toString().trim(), fetch));
         find.setOnClickListener(v -> find(query.getText().toString().trim()));
-        lines.setOnItemClickListener((parent, view, position, id) -> jump(spans.get(position).t0));
+        query.setOnEditorActionListener((v, actionId, event) -> {
+            find(query.getText().toString().trim());
+            return true;
+        });
+        findViewById(R.id.clear_query).setOnClickListener(v -> query.setText(""));
+        libraryQuery.setOnEditorActionListener((v, actionId, event) -> {
+            reloadLibrary();
+            return true;
+        });
+        description = findViewById(R.id.description);
+        lineSearch = findViewById(R.id.line_search);
+        findViewById(R.id.show_transcript).setOnClickListener(v -> {
+            relatedMode = false;
+            render();
+        });
+        findViewById(R.id.show_related).setOnClickListener(v -> {
+            relatedMode = true;
+            render();
+        });
+        lines.setOnItemClickListener((parent, view, position, id) -> {
+            if (relatedMode) {
+                openRelated(position);
+            } else if (position >= 0 && position < spans.size()) {
+                jump(spans.get(position).t0);
+            }
+        });
         lines.setOnItemLongClickListener((parent, view, position, id) -> {
-            editLine(position);
+            if (!relatedMode) {
+                editLine(position);
+            }
             return true;
         });
         findViewById(R.id.channel).setOnClickListener(v -> openChannel());
-        tabHome.setOnClickListener(v -> {
-            fillExploreServices();
-            showTab(0);
+        bottom.setOnItemSelectedListener(item -> {
+            if (filling) {
+                return true;
+            }
+            int itemId = item.getItemId();
+            if (itemId == R.id.nav_home) {
+                fillExploreServices();
+                showTab(0);
+            } else if (itemId == R.id.nav_library) {
+                showTab(1);
+            } else if (itemId == R.id.nav_downloads) {
+                showTab(2);
+            }
+            return true;
         });
-        tabLibrary.setOnClickListener(v -> showTab(1));
-        tabDownloads.setOnClickListener(v -> showTab(2));
         downloadsView.setOnItemClickListener((parent, view, position, id) -> {
             if (position < 0 || position >= keptVideos.size()) {
                 return;
@@ -191,6 +229,16 @@ public final class MainActivity extends AppCompatActivity {
         getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
+                View focus = getCurrentFocus();
+                if (focus instanceof EditText) {
+                    android.view.inputmethod.InputMethodManager imm =
+                            (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                    if (imm != null) {
+                        imm.hideSoftInputFromWindow(focus.getWindowToken(), 0);
+                    }
+                    focus.clearFocus();
+                    return;
+                }
                 if (videoOpen) {
                     showTab(section);
                 } else {
@@ -262,6 +310,29 @@ public final class MainActivity extends AppCompatActivity {
         }
         fillExploreServices();
         showTab(0);
+        loadFeed();
+    }
+
+    private void loadFeed() {
+        if (exploreServices.isEmpty()) {
+            return;
+        }
+        int which = Math.max(exploreService.getSelectedItemPosition(), 0);
+        StreamingService service = exploreServices.get(which);
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                Browse.Session session = Browse.feed(service);
+                String label = service.getServiceInfo().getName();
+                runOnUiThread(() -> {
+                    exploreBack = Collections.emptyList();
+                    showSession(session, label);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
     }
 
     private void showTab(int tab) {
@@ -283,9 +354,12 @@ public final class MainActivity extends AppCompatActivity {
         panelLibrary.setVisibility(!videoOpen && section == 1 ? View.VISIBLE : View.GONE);
         panelDownloads.setVisibility(!videoOpen && section == 2 ? View.VISIBLE : View.GONE);
         panelWatch.setVisibility(videoOpen ? View.VISIBLE : View.GONE);
-        tabHome.setEnabled(videoOpen || section != 0);
-        tabLibrary.setEnabled(videoOpen || section != 1);
-        tabDownloads.setEnabled(videoOpen || section != 2);
+        int nav = section == 1 ? R.id.nav_library : section == 2 ? R.id.nav_downloads : R.id.nav_home;
+        if (bottom.getSelectedItemId() != nav) {
+            filling = true;
+            bottom.setSelectedItemId(nav);
+            filling = false;
+        }
     }
 
     private void reloadDownloads() {
@@ -329,7 +403,22 @@ public final class MainActivity extends AppCompatActivity {
         for (StreamingService service : exploreServices) {
             names.add(service.getServiceInfo().getName());
         }
+        exploreService.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (!filling && exploreQuery.getText().toString().trim().isEmpty()
+                        && !videoOpen && section == 0) {
+                    loadFeed();
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+        filling = true;
         exploreService.setAdapter(spinner(names));
+        filling = false;
     }
 
     private void exploreSearch() {
@@ -784,6 +873,7 @@ public final class MainActivity extends AppCompatActivity {
                         page,
                         playUrl(info),
                         incoming);
+                Shelf.setThumb(db, id, Browse.thumbnailOf(info.getThumbnails()));
                 Shelf.Video video = Shelf.video(db, id);
                 runOnUiThread(() -> {
                     show(video);
@@ -804,8 +894,13 @@ public final class MainActivity extends AppCompatActivity {
         playUrl = video.playUrl == null ? "" : video.playUrl;
         pageUrl = video.pageUrl == null ? "" : video.pageUrl;
         tracks = Shelf.readTracks(db, video.id);
-        String heading = video.service + " · " + video.channel + " — " + video.title;
+        String heading = video.channel + " — " + video.title;
         title.setText(heading);
+        ((Button) findViewById(R.id.channel)).setText(video.channel);
+        relatedMode = false;
+        related = Collections.emptyList();
+        description.setText("");
+        loadDetail(video.id, pageUrl);
         fillServices();
         reloadLibrary();
         filling = true;
@@ -827,7 +922,60 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void loadDetail(long id, String page) {
+        if (page == null || page.isEmpty()) {
+            return;
+        }
+        io.execute(() -> {
+            try {
+                StreamInfo info = StreamInfo.getInfo(page);
+                List<Browse.Found> items = Browse.fromItems(info.getRelatedItems());
+                String text = "";
+                if (info.getDescription() != null && info.getDescription().content() != null) {
+                    text = info.getDescription().content()
+                            .replaceAll("<[^>]+>", " ")
+                            .replaceAll("\\s+", " ")
+                            .trim();
+                }
+                if (text.length() > 320) {
+                    text = text.substring(0, 320) + "…";
+                }
+                String shown = text;
+                Shelf.setThumb(db, id, Browse.thumbnailOf(info.getThumbnails()));
+                runOnUiThread(() -> {
+                    if (!page.equals(pageUrl)) {
+                        return;
+                    }
+                    related = items;
+                    description.setText(shown);
+                    if (relatedMode) {
+                        render();
+                    }
+                });
+            } catch (Exception ignored) {
+                // The player and transcript still work without the blurb.
+            }
+        });
+    }
+
+    private void openRelated(int position) {
+        if (position < 0 || position >= related.size()) {
+            return;
+        }
+        Browse.Found item = related.get(position);
+        if ("video".equals(item.kind)) {
+            openVideo(item.url);
+        }
+    }
+
     private void render() {
+        if (lineSearch != null) {
+            lineSearch.setVisibility(relatedMode ? View.GONE : View.VISIBLE);
+        }
+        if (relatedMode) {
+            lines.setAdapter(new RelatedAdapter());
+            return;
+        }
         if (tracks.isEmpty()) {
             spans = Collections.emptyList();
             extras = Collections.emptyList();
@@ -1085,6 +1233,48 @@ public final class MainActivity extends AppCompatActivity {
         return String.format(Locale.US, "%d:%02d", m, s);
     }
 
+    private void bindThumb(View row, String url) {
+        android.widget.ImageView thumb = row.findViewById(R.id.thumb);
+        if (thumb == null) {
+            return;
+        }
+        if (url == null || url.isEmpty()) {
+            com.bumptech.glide.Glide.with(row).clear(thumb);
+            thumb.setImageDrawable(null);
+        } else {
+            com.bumptech.glide.Glide.with(row).load(url).centerCrop().into(thumb);
+        }
+    }
+
+    private final class RelatedAdapter extends BaseAdapter {
+        @Override
+        public int getCount() {
+            return related.size();
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return related.get(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(int position, View convert, ViewGroup parent) {
+            View row = convert == null
+                    ? getLayoutInflater().inflate(R.layout.video_row, parent, false)
+                    : convert;
+            Browse.Found item = related.get(position);
+            ((TextView) row.findViewById(R.id.lib_title)).setText(item.name);
+            ((TextView) row.findViewById(R.id.lib_meta)).setText(item.meta);
+            bindThumb(row, item.thumb);
+            return row;
+        }
+    }
+
     private final class ExploreAdapter extends BaseAdapter {
         @Override
         public int getCount() {
@@ -1104,7 +1294,7 @@ public final class MainActivity extends AppCompatActivity {
         @Override
         public View getView(int position, View convert, ViewGroup parent) {
             View row = convert == null
-                    ? getLayoutInflater().inflate(R.layout.library_row, parent, false)
+                    ? getLayoutInflater().inflate(R.layout.video_row, parent, false)
                     : convert;
             Browse.Found item = exploreRows.get(position);
             TextView heading = row.findViewById(R.id.lib_title);
@@ -1112,9 +1302,10 @@ public final class MainActivity extends AppCompatActivity {
             heading.setText(item.name);
             String detail = item.kind;
             if (!item.meta.isEmpty()) {
-                detail = item.kind + " · " + item.meta;
+                detail = item.meta;
             }
             meta.setText(detail);
+            bindThumb(row, item.thumb);
             return row;
         }
     }
@@ -1138,13 +1329,14 @@ public final class MainActivity extends AppCompatActivity {
         @Override
         public View getView(int position, View convert, ViewGroup parent) {
             View row = convert == null
-                    ? getLayoutInflater().inflate(R.layout.library_row, parent, false)
+                    ? getLayoutInflater().inflate(R.layout.video_row, parent, false)
                     : convert;
             Shelf.Video video = keptVideos.get(position);
             TextView heading = row.findViewById(R.id.lib_title);
             TextView meta = row.findViewById(R.id.lib_meta);
-            heading.setText(video.channel + " — " + video.title);
-            meta.setText(video.service);
+            heading.setText(video.title);
+            meta.setText(video.channel);
+            bindThumb(row, video.thumb);
             return row;
         }
     }
@@ -1168,19 +1360,22 @@ public final class MainActivity extends AppCompatActivity {
         @Override
         public View getView(int position, View convert, ViewGroup parent) {
             View row = convert == null
-                    ? getLayoutInflater().inflate(R.layout.library_row, parent, false)
+                    ? getLayoutInflater().inflate(R.layout.video_row, parent, false)
                     : convert;
             TextView heading = row.findViewById(R.id.lib_title);
             TextView meta = row.findViewById(R.id.lib_meta);
+            String thumbUrl = "";
             if (libraryHits) {
                 Shelf.Hit hit = hits.get(position);
                 heading.setText(hit.quote);
                 meta.setText(hit.channel + " — " + hit.title);
             } else {
                 Shelf.Video video = shelfVideos.get(position);
-                heading.setText(video.channel + " — " + video.title);
-                meta.setText(video.service);
+                heading.setText(video.title);
+                meta.setText(video.channel);
+                thumbUrl = video.thumb;
             }
+            bindThumb(row, thumbUrl);
             return row;
         }
     }

@@ -1,5 +1,6 @@
 package app.cuepipe;
 
+import org.schabi.newpipe.extractor.Image;
 import org.schabi.newpipe.extractor.InfoItem;
 import org.schabi.newpipe.extractor.ListExtractor;
 import org.schabi.newpipe.extractor.NewPipe;
@@ -8,6 +9,8 @@ import org.schabi.newpipe.extractor.StreamingService;
 import org.schabi.newpipe.extractor.channel.ChannelInfo;
 import org.schabi.newpipe.extractor.channel.tabs.ChannelTabInfo;
 import org.schabi.newpipe.extractor.channel.tabs.ChannelTabs;
+import org.schabi.newpipe.extractor.kiosk.KioskExtractor;
+import org.schabi.newpipe.extractor.kiosk.KioskInfo;
 import org.schabi.newpipe.extractor.linkhandler.ListLinkHandler;
 import org.schabi.newpipe.extractor.linkhandler.SearchQueryHandler;
 import org.schabi.newpipe.extractor.playlist.PlaylistInfo;
@@ -25,12 +28,18 @@ public final class Browse {
         public final String name;
         public final String url;
         public final String meta;
+        public final String thumb;
 
         public Found(String kind, String name, String url, String meta) {
+            this(kind, name, url, meta, "");
+        }
+
+        public Found(String kind, String name, String url, String meta, String thumb) {
             this.kind = kind;
             this.name = name;
             this.url = url;
             this.meta = meta == null ? "" : meta;
+            this.thumb = thumb == null ? "" : thumb;
         }
     }
 
@@ -57,6 +66,16 @@ public final class Browse {
     }
 
     private Browse() {
+    }
+
+    public static Session feed(StreamingService service) throws Exception {
+        // KioskInfo.getInfo calls getName(), and YouTube's kiosk name parser
+        // NPEs when the channel response is missing. The item page itself is fine.
+        KioskExtractor extractor = service.getKioskList().getDefaultKioskExtractor();
+        extractor.fetchPage();
+        ListExtractor.InfoItemsPage<?> page = extractor.getInitialPage();
+        return new Session(fromItems(page.getItems()), page.getNextPage(), service.getServiceId(),
+                "feed", null, extractor.getUrl(), null);
     }
 
     public static Session search(StreamingService service, String query) throws Exception {
@@ -111,6 +130,8 @@ public final class Browse {
             page = SearchInfo.getMoreItems(service, session.search, session.next);
         } else if ("playlist".equals(session.mode)) {
             page = PlaylistInfo.getMoreItems(service, session.listUrl, session.next);
+        } else if ("feed".equals(session.mode)) {
+            page = KioskInfo.getMoreItems(service, session.listUrl, session.next);
         } else if (session.tab != null) {
             page = ChannelTabInfo.getMoreItems(service, session.tab, session.next);
         } else {
@@ -153,10 +174,44 @@ public final class Browse {
                 continue;
             } else if (item instanceof StreamInfoItem stream) {
                 meta = stream.getUploaderName() == null ? "" : stream.getUploaderName();
+                if (stream.getDuration() > 0) {
+                    meta = meta + " · " + clock(stream.getDuration());
+                }
             }
             out.add(new Found(kind, item.getName() == null ? item.getUrl() : item.getName(),
-                    item.getUrl(), meta));
+                    item.getUrl(), meta, thumbnailOf(item)));
         }
         return out;
+    }
+
+    public static String thumbnailOf(InfoItem item) {
+        return item == null ? "" : thumbnailOf(item.getThumbnails());
+    }
+
+    public static String thumbnailOf(java.util.List<Image> images) {
+        if (images == null || images.isEmpty()) {
+            return "";
+        }
+        for (int i = images.size() - 1; i >= 0; i--) {
+            String url = images.get(i).getUrl();
+            if (url != null && !url.isEmpty()) {
+                return url;
+            }
+        }
+        return "";
+    }
+
+    private static String clock(long seconds) {
+        long h = seconds / 3600;
+        long m = (seconds % 3600) / 60;
+        long s = seconds % 60;
+        if (h > 0) {
+            return h + ":" + two(m) + ":" + two(s);
+        }
+        return m + ":" + two(s);
+    }
+
+    private static String two(long n) {
+        return n < 10 ? "0" + n : Long.toString(n);
     }
 }
