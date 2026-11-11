@@ -90,12 +90,16 @@ public final class MainActivity extends AppCompatActivity {
     private List<Shelf.Track> tracks = Collections.emptyList();
     private List<Cues.Span> spans = Collections.emptyList();
     private List<List<Cues.Span>> extras = Collections.emptyList();
-    private final Runnable paintTick = new Runnable() {
+    private boolean followLines = true;
+    private int followed = -1;
+    private boolean triedFresh;
+    private final Runnable playTick = new Runnable() {
         @Override
         public void run() {
             paintOnScreen();
-            if (onScreen.isChecked() && player.isPlaying()) {
-                onScreen.postDelayed(this, 200);
+            followTranscript();
+            if (videoOpen && player.isPlaying()) {
+                lines.postDelayed(this, 250);
             }
         }
     };
@@ -128,9 +132,7 @@ public final class MainActivity extends AppCompatActivity {
         for (int i = 0; i < SLOTS; i++) {
             slots[i] = findViewById(slotIds[i]);
         }
-        EditText url = findViewById(R.id.url);
         EditText query = findViewById(R.id.query);
-        Button fetch = findViewById(R.id.fetch);
         Button find = findViewById(R.id.find);
         PlayerView playerView = findViewById(R.id.player);
 
@@ -145,14 +147,14 @@ public final class MainActivity extends AppCompatActivity {
         burn = findViewById(R.id.burn);
         onScreen = findViewById(R.id.on_screen);
         onScreen.setOnCheckedChangeListener((button, checked) -> {
-            onScreen.removeCallbacks(paintTick);
-            paintTick.run();
+            lines.removeCallbacks(playTick);
+            playTick.run();
         });
         player.addListener(new Player.Listener() {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
-                onScreen.removeCallbacks(paintTick);
-                paintTick.run();
+                lines.removeCallbacks(playTick);
+                playTick.run();
             }
 
             @Override
@@ -160,16 +162,28 @@ public final class MainActivity extends AppCompatActivity {
                     Player.PositionInfo oldPosition,
                     Player.PositionInfo newPosition,
                     int reason) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK
+                        || reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT) {
+                    followLines = true;
+                }
+                followed = -1;
+                followTranscript();
                 paintOnScreen();
             }
 
             @Override
             public void onPlayerError(PlaybackException error) {
+                if (!triedFresh && pageUrl != null && !pageUrl.isEmpty()) {
+                    triedFresh = true;
+                    int at = (int) Math.max(player.getCurrentPosition(), 0);
+                    player.clearMediaItems();
+                    jump(at);
+                    return;
+                }
                 title.setText("This source is not available");
             }
         });
 
-        fetch.setOnClickListener(v -> fetch(url.getText().toString().trim(), fetch));
         find.setOnClickListener(v -> find(query.getText().toString().trim()));
         query.setOnEditorActionListener((v, actionId, event) -> {
             find(query.getText().toString().trim());
@@ -194,8 +208,32 @@ public final class MainActivity extends AppCompatActivity {
             if (relatedMode) {
                 openRelated(position);
             } else if (position >= 0 && position < spans.size()) {
-                jump(spans.get(position).t0);
+                followLines = true;
+                followed = -1;
+                int t0 = spans.get(position).t0;
+                if (player.getMediaItemCount() > 0
+                        && player.getPlaybackState() != Player.STATE_IDLE) {
+                    seek(t0);
+                } else {
+                    jump(t0);
+                }
             }
+        });
+        lines.setOnScrollListener(new android.widget.AbsListView.OnScrollListener() {
+            @Override
+            public void onScrollStateChanged(android.widget.AbsListView view, int scrollState) {
+                if (scrollState == android.widget.AbsListView.OnScrollListener.SCROLL_STATE_TOUCH_SCROLL) {
+                    followLines = false;
+                }
+            }
+
+            @Override
+            public void onScroll(android.widget.AbsListView view, int first, int visible, int total) {
+            }
+        });
+        findViewById(R.id.details).setOnClickListener(v -> {
+            View block = findViewById(R.id.details_block);
+            block.setVisibility(block.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
         });
         lines.setOnItemLongClickListener((parent, view, position, id) -> {
             if (!relatedMode) {
@@ -248,11 +286,16 @@ public final class MainActivity extends AppCompatActivity {
             }
         });
         findViewById(R.id.explore_search).setOnClickListener(v -> exploreSearch());
+        exploreQuery.setOnEditorActionListener((v, actionId, event) -> {
+            exploreSearch();
+            return true;
+        });
         findViewById(R.id.explore_marks).setOnClickListener(v -> showBookmarks());
         findViewById(R.id.explore_more).setOnClickListener(v -> more());
         findViewById(R.id.explore_check).setOnClickListener(v -> checkFeed());
         findViewById(R.id.keep).setOnClickListener(v -> keep());
         findViewById(R.id.burned).setOnClickListener(v -> burned());
+        findViewById(R.id.recognize).setOnClickListener(v -> recognize());
         findViewById(R.id.explore_back).setOnClickListener(v -> {
             if (!exploreBack.isEmpty()) {
                 showExplore(exploreBack, "Back");
@@ -303,7 +346,7 @@ public final class MainActivity extends AppCompatActivity {
 
         Shelf.Video latest = Shelf.latest(db);
         if (latest != null) {
-            show(latest);
+            show(latest, false);
         } else {
             fillServices();
             reloadLibrary();
@@ -321,23 +364,49 @@ public final class MainActivity extends AppCompatActivity {
         StreamingService service = exploreServices.get(which);
         exploreStatus.setText("Loading");
         io.execute(() -> {
-            try {
-                Browse.Session session = Browse.feed(service);
-                String label = service.getServiceInfo().getName();
-                runOnUiThread(() -> {
-                    exploreBack = Collections.emptyList();
-                    showSession(session, label);
-                });
-            } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+            Exception last = null;
+            for (int attempt = 0; attempt < 3; attempt++) {
+                try {
+                    Browse.Session session = Browse.feed(service);
+                    String label = service.getServiceInfo().getName();
+                    runOnUiThread(() -> {
+                        exploreBack = Collections.emptyList();
+                        showSession(session, label);
+                    });
+                    return;
+                } catch (Exception e) {
+                    last = e;
+                    if (!dns(e) || attempt == 2) {
+                        break;
+                    }
+                    try {
+                        Thread.sleep(700L * (attempt + 1));
+                    } catch (InterruptedException interrupted) {
+                        break;
+                    }
+                }
             }
+            String message = last.getClass().getSimpleName() + ": " + last.getMessage();
+            runOnUiThread(() -> exploreStatus.setText(message));
         });
+    }
+
+    private static boolean dns(Throwable error) {
+        while (error != null) {
+            if (error instanceof java.net.UnknownHostException) {
+                return true;
+            }
+            error = error.getCause();
+        }
+        return false;
     }
 
     private void showTab(int tab) {
         section = tab;
         videoOpen = false;
+        if (lines != null) {
+            lines.removeCallbacks(playTick);
+        }
         if (tab == 2) {
             reloadDownloads();
         }
@@ -394,6 +463,100 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void recognize() {
+        String local = Shelf.prefer(Shelf.localPath(db, videoId), "");
+        if (local.isEmpty()) {
+            title.setText("Keep the video first, then recognize speech");
+            return;
+        }
+        title.setText("Recognizing");
+        String path = local;
+        String page = pageUrl;
+        long id = videoId;
+        io.execute(() -> {
+            java.io.File side = null;
+            try {
+                float[] samples;
+                try {
+                    samples = Pcm.decode16kMono(path);
+                } catch (java.io.IOException missing) {
+                    if (missing.getMessage() == null || !missing.getMessage().equals("no audio")) {
+                        throw missing;
+                    }
+                    if (page == null || page.isEmpty()) {
+                        throw new java.io.IOException("no audio");
+                    }
+                    StreamInfo info = StreamInfo.getInfo(page);
+                    String source = audioUrl(info);
+                    if (source.isEmpty()) {
+                        throw new java.io.IOException("no audio");
+                    }
+                    java.io.File dir = getExternalFilesDir("media");
+                    if (dir == null) {
+                        dir = getFilesDir();
+                    }
+                    side = new java.io.File(dir, id + ".speech.m4a");
+                    download(source, side, "Audio");
+                    samples = Pcm.decode16kMono(side.getAbsolutePath());
+                }
+                Speech.Heard heard = Speech.transcribe(MainActivity.this, samples, pct ->
+                        runOnUiThread(() -> title.setText(pct < 0 ? "Recognizing" : "Model " + pct + "%")));
+                if (heard.transcript.spans.isEmpty()) {
+                    runOnUiThread(() -> title.setText("No speech recognized"));
+                    return;
+                }
+                Shelf.addTrack(db, id, new Shelf.TrackIn(heard.lang, "asr", "whisper", heard.transcript));
+                runOnUiThread(() -> show(Shelf.video(db, id)));
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> title.setText(message));
+            } finally {
+                if (side != null) {
+                    side.delete();
+                }
+            }
+        });
+    }
+
+    /** Saves a stream. Does not record the path on the shelf. */
+    private void download(String source, java.io.File dest, String label) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(source)
+                .header("User-Agent", OkDownloader.USER_AGENT)
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            try (java.io.InputStream in = response.body().byteStream();
+                 java.io.OutputStream out = new java.io.FileOutputStream(dest)) {
+                byte[] buf = new byte[8192];
+                int n;
+                long got = 0;
+                long reported = -1;
+                while ((n = in.read(buf)) >= 0) {
+                    out.write(buf, 0, n);
+                    got += n;
+                    long mb = got / (1024 * 1024);
+                    if (mb != reported) {
+                        reported = mb;
+                        runOnUiThread(() -> title.setText(label + " " + mb + " MB"));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            dest.delete();
+            if (e instanceof java.io.IOException) {
+                throw (java.io.IOException) e;
+            }
+            throw new java.io.IOException(e.getMessage(), e);
+        }
+    }
+
     private void fillExploreServices() {
         if (!exploreServices.isEmpty()) {
             return;
@@ -423,38 +586,47 @@ public final class MainActivity extends AppCompatActivity {
 
     private void exploreSearch() {
         String query = exploreQuery.getText().toString().trim();
+        if (query.startsWith("www.")) {
+            query = "https://" + query;
+        }
         if (query.isEmpty() || exploreServices.isEmpty()) {
+            if (exploreServices.isEmpty()) {
+                return;
+            }
+            loadFeed();
             return;
         }
         exploreStatus.setText("Searching");
+        String typed = query;
         int which = Math.max(exploreService.getSelectedItemPosition(), 0);
         io.execute(() -> {
             try {
                 StreamingService service = exploreServices.get(which);
                 StreamingService.LinkType link = null;
                 try {
-                    StreamingService byUrl = NewPipe.getServiceByUrl(query);
-                    link = byUrl.getLinkTypeByUrl(query);
+                    StreamingService byUrl = NewPipe.getServiceByUrl(typed);
+                    link = byUrl.getLinkTypeByUrl(typed);
                     service = byUrl;
                 } catch (Exception ignored) {
                     link = null;
                 }
-                if (link == StreamingService.LinkType.STREAM) {
-                    runOnUiThread(() -> openVideo(query));
+                if (link == StreamingService.LinkType.STREAM
+                        || (link == null && typed.contains("://"))) {
+                    runOnUiThread(() -> openVideo(typed));
                     return;
                 }
                 if (link == StreamingService.LinkType.CHANNEL) {
-                    Browse.Session session = Browse.channel(service, query);
+                    Browse.Session session = Browse.channel(service, typed);
                     String label = service.getServiceInfo().getName();
                     runOnUiThread(() -> showSession(session, label));
                     return;
                 }
                 if (link == StreamingService.LinkType.PLAYLIST) {
-                    Browse.Session session = Browse.playlist(service, query);
+                    Browse.Session session = Browse.playlist(service, typed);
                     runOnUiThread(() -> showSession(session, "Playlist"));
                     return;
                 }
-                Browse.Session session = Browse.search(service, query);
+                Browse.Session session = Browse.search(service, typed);
                 String label = service.getServiceInfo().getName();
                 runOnUiThread(() -> {
                     exploreBack = Collections.emptyList();
@@ -566,9 +738,8 @@ public final class MainActivity extends AppCompatActivity {
 
     private void openVideo(String page) {
         showVideo();
-        EditText url = findViewById(R.id.url);
-        url.setText(page);
-        fetch(page, findViewById(R.id.fetch));
+        exploreQuery.setText(page);
+        fetch(page);
     }
 
     private void toggleBookmark(int position) {
@@ -741,9 +912,16 @@ public final class MainActivity extends AppCompatActivity {
             show(Shelf.video(db, hit.videoId));
             showVideo();
             int index = indexOfHit(hit);
-            if (index >= 0) {
+            if (index >= 0 && index < spans.size()) {
+                followLines = true;
+                followed = index;
                 lines.setItemChecked(index, true);
-                lines.smoothScrollToPosition(index);
+                lines.setSelectionFromTop(index, 0);
+                if (player.getMediaItemCount() > 0) {
+                    seek(spans.get(index).t0);
+                } else {
+                    jump(spans.get(index).t0);
+                }
             }
             return;
         }
@@ -793,9 +971,14 @@ public final class MainActivity extends AppCompatActivity {
         }
         String query = libraryQuery.getText().toString().trim();
         if (!query.isEmpty()) {
+            boolean fuzzy = ((android.widget.CheckBox) findViewById(R.id.fuzzy)).isChecked();
+            boolean concepts = ((android.widget.CheckBox) findViewById(R.id.concepts)).isChecked();
+            boolean meaning = ((android.widget.CheckBox) findViewById(R.id.meaning)).isChecked();
+            if (meaning) {
+                searchMeaning(query, fuzzy, concepts);
+                return;
+            }
             try {
-                boolean fuzzy = ((android.widget.CheckBox) findViewById(R.id.fuzzy)).isChecked();
-                boolean concepts = ((android.widget.CheckBox) findViewById(R.id.concepts)).isChecked();
                 hits = Shelf.searchAll(db, db, Query.match(query, fuzzy, concepts));
                 libraryHits = true;
                 libraryStatus.setText(hits.size() + " hits");
@@ -812,12 +995,70 @@ public final class MainActivity extends AppCompatActivity {
         library.setAdapter(new LibraryAdapter());
     }
 
-    private void fetch(String page, Button button) {
+    /** Word hits plus paragraph vectors. The model is fetched the first time this runs. */
+    private void searchMeaning(String query, boolean fuzzy, boolean concepts) {
+        hits = Collections.emptyList();
+        libraryHits = true;
+        library.setAdapter(new LibraryAdapter());
+        libraryStatus.setText("Meaning");
+        io.execute(() -> {
+            try {
+                List<Shelf.Hit> lexical = Collections.emptyList();
+                try {
+                    lexical = Shelf.searchAll(db, db, Query.match(query, fuzzy, concepts));
+                } catch (RuntimeException ignored) {
+                    // A vector can still rank a line when the word query does not parse.
+                }
+                float[] asked = Meaning.query(this, query, pct -> runOnUiThread(() ->
+                        libraryStatus.setText(pct < 0 ? "Meaning" : "Model " + pct + "%")));
+                List<String[]> tracks = db.rows("SELECT id, video_id FROM track");
+                List<Near.Scored> scored = new ArrayList<>();
+                int done = 0;
+                for (String[] row : tracks) {
+                    long trackId = Long.parseLong(row[0]);
+                    long videoId = Long.parseLong(row[1]);
+                    Shelf.Video video = Shelf.video(db, videoId);
+                    if (video == null) {
+                        continue;
+                    }
+                    List<Cues.Span> rowSpans = Shelf.readSpans(db, trackId);
+                    for (Near.Paragraph paragraph : Near.paragraphs(rowSpans)) {
+                        int hash = paragraph.text.hashCode();
+                        float[] vector = db.readVec(trackId, paragraph.spanIndex, hash);
+                        if (vector == null) {
+                            vector = Meaning.passage(this, paragraph.text);
+                            db.putVec(trackId, paragraph.spanIndex, hash, vector);
+                        }
+                        String quote = paragraph.text.length() > 180
+                                ? paragraph.text.substring(0, 180) : paragraph.text;
+                        scored.add(new Near.Scored(new Shelf.Hit(
+                                video.id, trackId, paragraph.byteOffset,
+                                video.title, video.channel, quote), Near.cosine(asked, vector)));
+                    }
+                    done++;
+                    int shown = done;
+                    int total = tracks.size();
+                    runOnUiThread(() -> libraryStatus.setText("Meaning " + shown + "/" + total));
+                }
+                List<Shelf.Hit> found = Near.blend(lexical, scored);
+                runOnUiThread(() -> {
+                    hits = found;
+                    libraryHits = true;
+                    libraryStatus.setText(found.size() + " hits");
+                    library.setAdapter(new LibraryAdapter());
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> libraryStatus.setText(message));
+            }
+        });
+    }
+
+    private void fetch(String page) {
         if (page.isEmpty()) {
             title.setText("Paste a video URL");
             return;
         }
-        button.setEnabled(false);
         title.setText("Fetching");
         io.execute(() -> {
             try {
@@ -855,10 +1096,7 @@ public final class MainActivity extends AppCompatActivity {
                 if (incoming.isEmpty()) {
                     String why = lastError == null ? "none parsed" : lastError;
                     String message = "No captions (" + total + " tracks, " + why + ")";
-                    runOnUiThread(() -> {
-                        title.setText(message);
-                        button.setEnabled(true);
-                    });
+                    runOnUiThread(() -> title.setText(message));
                     return;
                 }
                 String channelKey = channelKey(info.getUploaderUrl(), info.getUploaderName());
@@ -875,24 +1113,25 @@ public final class MainActivity extends AppCompatActivity {
                         incoming);
                 Shelf.setThumb(db, id, Browse.thumbnailOf(info.getThumbnails()));
                 Shelf.Video video = Shelf.video(db, id);
-                runOnUiThread(() -> {
-                    show(video);
-                    button.setEnabled(true);
-                });
+                runOnUiThread(() -> show(video));
             } catch (Exception e) {
                 String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> {
-                    title.setText(message);
-                    button.setEnabled(true);
-                });
+                runOnUiThread(() -> title.setText(message));
             }
         });
     }
 
     private void show(Shelf.Video video) {
+        show(video, true);
+    }
+
+    private void show(Shelf.Video video, boolean prepare) {
         videoId = video.id;
+        followLines = true;
+        followed = -1;
         playUrl = video.playUrl == null ? "" : video.playUrl;
         pageUrl = video.pageUrl == null ? "" : video.pageUrl;
+        triedFresh = false;
         tracks = Shelf.readTracks(db, video.id);
         String heading = video.channel + " — " + video.title;
         title.setText(heading);
@@ -916,9 +1155,11 @@ public final class MainActivity extends AppCompatActivity {
         }
         filling = false;
         render();
-        if (video.playUrl != null && !video.playUrl.isEmpty()) {
+        if (prepare && video.playUrl != null && !video.playUrl.isEmpty()) {
             player.setMediaItem(MediaItem.fromUri(video.playUrl));
             player.prepare();
+        } else if (!prepare) {
+            player.clearMediaItems();
         }
     }
 
@@ -1001,6 +1242,8 @@ public final class MainActivity extends AppCompatActivity {
         }
         this.extras = extras;
         lines.setAdapter(new LineAdapter(spans, extras));
+        followed = -1;
+        followTranscript();
         paintOnScreen();
     }
 
@@ -1018,6 +1261,30 @@ public final class MainActivity extends AppCompatActivity {
         }
         burn.setText(text);
         burn.setVisibility(View.VISIBLE);
+    }
+
+    /** Marks the span under the playhead and keeps it on screen while follow is on. */
+    private void followTranscript() {
+        if (!videoOpen || relatedMode || spans.isEmpty() || lines.getAdapter() == null) {
+            return;
+        }
+        int at = Cues.indexAt(spans, (int) player.getCurrentPosition());
+        if (at < 0) {
+            return;
+        }
+        boolean moved = at != followed;
+        if (moved) {
+            followed = at;
+            lines.setItemChecked(at, true);
+        }
+        if (!followLines || !moved) {
+            return;
+        }
+        int first = lines.getFirstVisiblePosition();
+        int last = lines.getLastVisiblePosition();
+        if (first < 0 || at < first || at >= last) {
+            lines.setSelectionFromTop(at, Math.max(lines.getHeight() / 5, 0));
+        }
     }
 
     /** Track index for a slot. Slots after the first use position 0 as None. */
@@ -1431,7 +1698,9 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        onScreen.removeCallbacks(paintTick);
+        if (lines != null) {
+            lines.removeCallbacks(playTick);
+        }
         player.release();
         shelf.close();
         io.shutdown();

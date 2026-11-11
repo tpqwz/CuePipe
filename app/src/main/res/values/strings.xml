@@ -16,6 +16,7 @@
     <string name="search">Search</string>
     <string name="transcript">Transcript</string>
     <string name="related">Related</string>
+    <string name="details">Details</string>
     <string name="explore_hint">Search or paste a URL</string>
     <string name="bookmarks">Bookmarks</string>
     <string name="back">Back</string>
@@ -23,7 +24,9 @@
     <string name="check">Check</string>
     <string name="keep">Keep</string>
     <string name="burned">Burned-in</string>
+    <string name="recognize">Recognize</string>
     <string name="fuzzy">Fuzzy</string>
     <string name="concepts">Concepts</string>
+    <string name="meaning">Meaning</string>
     <string name="library_search_hint">Search the library</string>
 </resources>

@@ -123,6 +123,13 @@ public final class Shelf {
                     + "text TEXT NOT NULL)",
             "CREATE TABLE docs (docid INTEGER PRIMARY KEY, body TEXT NOT NULL)",
             "CREATE VIRTUAL TABLE fts USING fts4(content='docs', body, tokenize=porter)",
+            "CREATE TABLE vec ("
+                    + "track_id INTEGER NOT NULL,"
+                    + "idx INTEGER NOT NULL,"
+                    + "hash INTEGER NOT NULL,"
+                    + "dim INTEGER NOT NULL,"
+                    + "v BLOB NOT NULL,"
+                    + "PRIMARY KEY (track_id, idx))",
             BOOKMARK_SQL,
     };
 
@@ -479,7 +486,7 @@ public final class Shelf {
 
     private static final class Db extends SQLiteOpenHelper {
         Db(Context context) {
-            super(context, "cuepipe.db", null, 5);
+            super(context, "cuepipe.db", null, 6);
         }
 
         @Override
@@ -505,6 +512,15 @@ public final class Shelf {
             }
             if (oldVersion < 5) {
                 db.execSQL("ALTER TABLE video ADD COLUMN thumb TEXT NOT NULL DEFAULT ''");
+            }
+            if (oldVersion < 6) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS vec ("
+                        + "track_id INTEGER NOT NULL,"
+                        + "idx INTEGER NOT NULL,"
+                        + "hash INTEGER NOT NULL,"
+                        + "dim INTEGER NOT NULL,"
+                        + "v BLOB NOT NULL,"
+                        + "PRIMARY KEY (track_id, idx))");
             }
         }
 
@@ -578,6 +594,37 @@ public final class Shelf {
                 }
             }
             return out;
+        }
+
+        public float[] readVec(long trackId, int idx, int hash) {
+            try (Cursor c = db.rawQuery(
+                    "SELECT hash, dim, v FROM vec WHERE track_id=? AND idx=?",
+                    new String[]{Long.toString(trackId), Integer.toString(idx)})) {
+                if (!c.moveToFirst()) {
+                    return null;
+                }
+                if (c.getInt(0) != hash) {
+                    return null;
+                }
+                byte[] blob = c.getBlob(2);
+                int dim = c.getInt(1);
+                if (blob == null || dim <= 0 || blob.length < dim * 4) {
+                    return null;
+                }
+                float[] vector = new float[dim];
+                java.nio.ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        .asFloatBuffer().get(vector);
+                return vector;
+            }
+        }
+
+        public void putVec(long trackId, int idx, int hash, float[] vector) {
+            byte[] blob = new byte[vector.length * 4];
+            java.nio.ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                    .asFloatBuffer().put(vector);
+            db.execSQL(
+                    "INSERT OR REPLACE INTO vec(track_id, idx, hash, dim, v) VALUES(?,?,?,?,?)",
+                    new Object[]{trackId, idx, hash, vector.length, blob});
         }
 
         private static void bind(SQLiteStatement st, Object[] args) {

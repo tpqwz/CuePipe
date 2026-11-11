@@ -104,6 +104,29 @@ public final class Cues {
         return best;
     }
 
+    /**
+     * The span that contains timeMs. In a gap, the latest span that has already
+     * started, so the reader stays on the line the playhead just left. Before the
+     * first span, -1.
+     */
+    public static int indexAt(List<Span> spans, int timeMs) {
+        int at = -1;
+        if (spans == null) {
+            return -1;
+        }
+        for (int i = 0; i < spans.size(); i++) {
+            Span span = spans.get(i);
+            if (span.t0 > timeMs) {
+                break;
+            }
+            at = i;
+            if (timeMs < span.t1) {
+                return i;
+            }
+        }
+        return at;
+    }
+
     /** The primary line that contains timeMs, plus each extra line that overlaps it. */
     public static String captionAt(List<Span> primary, List<List<Span>> extras, int timeMs) {
         int at = -1;

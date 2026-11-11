@@ -105,6 +105,11 @@ public final class CuesTest {
         assertEquals("hello\nこんにちは", Cues.captionAt(a.spans, List.of(b.spans), 1000));
         assertEquals("", Cues.captionAt(a.spans, List.of(b.spans), 3000));
         assertEquals("world", Cues.captionAt(a.spans, List.of(b.spans), 5000));
+        assertEquals(0, Cues.indexAt(a.spans, 1000));
+        assertEquals(0, Cues.indexAt(a.spans, 3000));
+        assertEquals(1, Cues.indexAt(a.spans, 5000));
+        assertEquals(-1, Cues.indexAt(a.spans, -1));
+        assertEquals(-1, Cues.indexAt(List.of(), 1000));
     }
 
     @Test

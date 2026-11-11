@@ -9,7 +9,7 @@ import java.util.Map;
 /**
  * Turns a shelf query into an FTS4 MATCH string.
  * The index uses the porter tokenizer, so English stemming happens in SQLite.
- * shortcut: Concepts is a small synonym list, not WordNet. Meaning is not here.
+ * shortcut: Concepts is a small synonym list, not WordNet. Meaning is a separate vector table.
  */
 public final class Query {
     private static final Map<String, String[]> CONCEPTS = new HashMap<>();

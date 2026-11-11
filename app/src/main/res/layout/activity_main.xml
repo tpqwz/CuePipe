@@ -86,6 +86,12 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/concepts" />
+
+                <CheckBox
+                    android:id="@+id/meaning"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/meaning" />
             </LinearLayout>
 
             <TextView
@@ -136,43 +142,19 @@
                     android:id="@+id/title"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="2"
                     android:paddingTop="4dp"
                     android:textAppearance="?android:attr/textAppearanceMedium" />
 
                 <Button
                     android:id="@+id/channel"
                     style="?attr/borderlessButtonStyle"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
                     android:text="@string/channel" />
-
-                <TextView
-                    android:id="@+id/description"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:maxLines="3"
-                    android:paddingTop="4dp"
-                    android:textAppearance="?attr/textAppearanceBodySmall" />
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal">
-
-                    <Button
-                        android:id="@+id/show_transcript"
-                        style="?attr/borderlessButtonStyle"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/transcript" />
-
-                    <Button
-                        android:id="@+id/show_related"
-                        style="?attr/borderlessButtonStyle"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/related" />
-                </LinearLayout>
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -196,6 +178,14 @@
                         android:contentDescription="@string/burned"
                         android:src="@android:drawable/ic_menu_camera" />
 
+                    <ImageButton
+                        android:id="@+id/recognize"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="@string/recognize"
+                        android:src="@android:drawable/ic_btn_speak_now" />
+
                     <CheckBox
                         android:id="@+id/on_screen"
                         android:layout_width="48dp"
@@ -204,6 +194,48 @@
                         android:button="@android:drawable/ic_menu_view"
                         android:contentDescription="@string/on_screen" />
                 </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/show_transcript"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/transcript" />
+
+                    <Button
+                        android:id="@+id/show_related"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/related" />
+
+                    <Button
+                        android:id="@+id/details"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/details" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/details_block"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/description"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:maxLines="6"
+                    android:paddingTop="4dp"
+                    android:textAppearance="?attr/textAppearanceBodySmall" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -273,6 +305,7 @@
                         android:layout_height="wrap_content"
                         android:text="@string/find" />
                 </LinearLayout>
+                </LinearLayout>
 
                 <ListView
                     android:id="@+id/lines"
@@ -317,28 +350,6 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/search" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
-
-                <EditText
-                    android:id="@+id/url"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:hint="@string/url_hint"
-                    android:importantForAutofill="no"
-                    android:inputType="textUri" />
-
-                <Button
-                    android:id="@+id/fetch"
-                    style="?attr/borderlessButtonStyle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/fetch" />
             </LinearLayout>
 
             <LinearLayout
