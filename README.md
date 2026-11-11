@@ -1,8 +1,8 @@
-# cuepipe
+# CuePipe
 
 An Android client for the videos you keep. A transcript is the work. A channel is the creator. The player opens a place in that work.
 
-NewPipeExtractor supplies streams, caption tracks, channels, and playlists for every service it knows: YouTube, SoundCloud, PeerTube, Bandcamp, and media.ccc.de. ExoPlayer plays. A site that only a PipePipe fork extracts is outside this extractor. The shelf, the reader, the capture queue, and the index are this program. The extractor is GPL-3, so cuepipe is GPL-3.
+NewPipeExtractor supplies streams, caption tracks, channels, and playlists for every service it knows: YouTube, SoundCloud, PeerTube, Bandcamp, and media.ccc.de. ExoPlayer plays. A site that only a PipePipe fork extracts is outside this extractor. The shelf, the reader, the capture queue, and the index are this program. The extractor is GPL-3, so CuePipe is GPL-3.
 
 ## Shelf
 
@@ -33,4 +33,4 @@ This tree is that first slice, as its own app. It uses NewPipeExtractor for the 
 ./gradlew :app:assembleDebug
 ```
 
-The debug APK is `app/build/outputs/apk/debug/app-debug.apk`. The extractor is fetched from JitPack, which compiles it on the first build. A push to `master` builds that APK on GitHub Actions and keeps it as the `cuepipe` artifact. Publishing a release attaches the same file to the release. It is signed with the debug key, so it installs by sideload. Paste a URL from any service the extractor knows, fetch, and pick up to four caption tracks when the video has them. A tap or a search hit seeks the player. Stemming, Fuzzy, Concepts, Recognize (whisper.cpp), and Meaning are in this slice. Meaning fetches English E5 the first time a library search uses it and keeps paragraph vectors in their own table. The GitHub build installs NDK 28.2.13676358 and CMake 3.22.1 because Recognize compiles whisper.cpp.
+The debug APK is `app/build/outputs/apk/debug/app-debug.apk`. The extractor is fetched from JitPack, which compiles it on the first build. A push to `master` builds that APK on GitHub Actions and keeps it as the `CuePipe` artifact. Publishing a release attaches the same file to the release. It is signed with the debug key, so it installs by sideload. Paste a URL from any service the extractor knows, fetch, and pick up to four caption tracks when the video has them. A tap or a search hit seeks the player. Stemming, Fuzzy, Concepts, Recognize (whisper.cpp), and Meaning are in this slice. Meaning fetches English E5 the first time a library search uses it and keeps paragraph vectors in their own table. The GitHub build installs NDK 28.2.13676358 and CMake 3.22.1 because Recognize compiles whisper.cpp.

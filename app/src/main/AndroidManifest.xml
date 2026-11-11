@@ -4,12 +4,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:name=".CuepipeApp"
+        android:name=".CuePipeApp"
         android:allowBackup="false"
         android:icon="@android:drawable/ic_media_play"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Cuepipe">
+        android:theme="@style/Theme.CuePipe">
         <activity
             android:name=".MainActivity"
             android:exported="true">

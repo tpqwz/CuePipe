@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">cuepipe</string>
+    <string name="app_name">CuePipe</string>
     <string name="url_hint">Video URL</string>
     <string name="fetch">Fetch</string>
     <string name="search_hint">Search this transcript</string>
@@ -16,6 +16,7 @@
     <string name="search">Search</string>
     <string name="transcript">Transcript</string>
     <string name="related">Related</string>
+    <string name="paragraphs">Paragraphs</string>
     <string name="details">Details</string>
     <string name="explore_hint">Search or paste a URL</string>
     <string name="bookmarks">Bookmarks</string>

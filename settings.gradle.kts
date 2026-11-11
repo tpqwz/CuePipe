@@ -45,5 +45,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "cuepipe"
+rootProject.name = "CuePipe"
 include(":app")
