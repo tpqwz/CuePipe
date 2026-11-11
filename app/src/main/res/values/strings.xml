@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">cuepipe</string>
+    <string name="url_hint">Video URL</string>
+    <string name="fetch">Fetch</string>
+    <string name="search_hint">Search this transcript</string>
+    <string name="find">Find</string>
+    <string name="no_track">None</string>
+    <string name="on_screen">On screen</string>
+    <string name="tab_library">Library</string>
+    <string name="tab_reader">Reader</string>
+    <string name="tab_watch">Watch</string>
+    <string name="tab_explore">Explore</string>
+    <string name="explore_hint">Search or paste a URL</string>
+    <string name="bookmarks">Bookmarks</string>
+    <string name="back">Back</string>
+    <string name="more">More</string>
+    <string name="check">Check</string>
+    <string name="keep">Keep</string>
+    <string name="burned">Burned-in</string>
+    <string name="fuzzy">Fuzzy</string>
+    <string name="concepts">Concepts</string>
+    <string name="library_search_hint">Search the library</string>
+</resources>
