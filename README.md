@@ -33,4 +33,4 @@ This tree is that first slice, as its own app. It uses NewPipeExtractor for the 
 ./gradlew :app:assembleDebug
 ```
 
-The debug APK is `app/build/outputs/apk/debug/app-debug.apk`. The extractor is fetched from JitPack, which compiles it on the first build. Paste a URL from any service the extractor knows, fetch, and pick up to four caption tracks when the video has them. A tap or a search hit seeks the player. Stemming, Fuzzy, Concepts, Meaning, and on-device recognition are not in this slice.
+The debug APK is `app/build/outputs/apk/debug/app-debug.apk`. The extractor is fetched from JitPack, which compiles it on the first build. A push to `master` builds that APK on GitHub Actions and keeps it as the `cuepipe` artifact. Publishing a release attaches the same file to the release. It is signed with the debug key, so it installs by sideload. Paste a URL from any service the extractor knows, fetch, and pick up to four caption tracks when the video has them. A tap or a search hit seeks the player. Stemming, Fuzzy, Concepts, Meaning, and on-device recognition are not in this slice.
