@@ -26,6 +26,12 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.PlayerView;
 
+import com.google.android.gms.tasks.Tasks;
+import com.google.mlkit.nl.translate.TranslateLanguage;
+import com.google.mlkit.nl.translate.Translation;
+import com.google.mlkit.nl.translate.Translator;
+import com.google.mlkit.nl.translate.TranslatorOptions;
+
 import org.schabi.newpipe.extractor.MediaFormat;
 import org.schabi.newpipe.extractor.NewPipe;
 import org.schabi.newpipe.extractor.StreamingService;
@@ -48,6 +54,7 @@ public final class MainActivity extends AppCompatActivity {
     private Shelf.AndroidSql db;
     private ExoPlayer player;
     private TextView title;
+    private TextView status;
     private TextView burn;
     private TextView libraryStatus;
     private ListView library;
@@ -111,6 +118,7 @@ public final class MainActivity extends AppCompatActivity {
         shelf = new Shelf(this);
         db = shelf.sql();
         title = findViewById(R.id.title);
+        status = findViewById(R.id.status);
         lines = findViewById(R.id.lines);
         library = findViewById(R.id.library);
         libraryQuery = findViewById(R.id.library_query);
@@ -180,7 +188,7 @@ public final class MainActivity extends AppCompatActivity {
                     jump(at);
                     return;
                 }
-                title.setText("This source is not available");
+                status.setText("This source is not available");
             }
         });
 
@@ -295,6 +303,7 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.explore_check).setOnClickListener(v -> checkFeed());
         findViewById(R.id.keep).setOnClickListener(v -> keep());
         findViewById(R.id.burned).setOnClickListener(v -> burned());
+        findViewById(R.id.translate).setOnClickListener(v -> translate());
         findViewById(R.id.recognize).setOnClickListener(v -> recognize());
         findViewById(R.id.explore_back).setOnClickListener(v -> {
             if (!exploreBack.isEmpty()) {
@@ -440,25 +449,25 @@ public final class MainActivity extends AppCompatActivity {
     private void burned() {
         String local = Shelf.prefer(Shelf.localPath(db, videoId), "");
         if (local.isEmpty()) {
-            title.setText("Keep the video first, then read the burned-in line");
+            status.setText("Keep the video first, then read the burned-in line");
             return;
         }
-        title.setText("Reading burned-in lines");
+        status.setText("Reading burned-in lines");
         String path = local;
         long id = videoId;
         io.execute(() -> {
             try {
                 Cues.Transcript transcript = Burned.read(path, fraction -> runOnUiThread(
-                        () -> title.setText("Burned-in " + fraction + "%")));
+                        () -> status.setText("Burned-in " + fraction + "%")));
                 if (transcript.spans.isEmpty()) {
-                    runOnUiThread(() -> title.setText("No burned-in line found"));
+                    runOnUiThread(() -> status.setText("No burned-in line found"));
                     return;
                 }
                 Shelf.addTrack(db, id, new Shelf.TrackIn("zh", "ocr", "burned-in", transcript));
                 runOnUiThread(() -> show(Shelf.video(db, id)));
             } catch (Exception e) {
                 String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> title.setText(message));
+                runOnUiThread(() -> status.setText(message));
             }
         });
     }
@@ -466,10 +475,10 @@ public final class MainActivity extends AppCompatActivity {
     private void recognize() {
         String local = Shelf.prefer(Shelf.localPath(db, videoId), "");
         if (local.isEmpty()) {
-            title.setText("Keep the video first, then recognize speech");
+            status.setText("Keep the video first, then recognize speech");
             return;
         }
-        title.setText("Recognizing");
+        status.setText("Recognizing");
         String path = local;
         String page = pageUrl;
         long id = videoId;
@@ -500,16 +509,16 @@ public final class MainActivity extends AppCompatActivity {
                     samples = Pcm.decode16kMono(side.getAbsolutePath());
                 }
                 Speech.Heard heard = Speech.transcribe(MainActivity.this, samples, pct ->
-                        runOnUiThread(() -> title.setText(pct < 0 ? "Recognizing" : "Model " + pct + "%")));
+                        runOnUiThread(() -> status.setText(pct < 0 ? "Recognizing" : "Model " + pct + "%")));
                 if (heard.transcript.spans.isEmpty()) {
-                    runOnUiThread(() -> title.setText("No speech recognized"));
+                    runOnUiThread(() -> status.setText("No speech recognized"));
                     return;
                 }
                 Shelf.addTrack(db, id, new Shelf.TrackIn(heard.lang, "asr", "whisper", heard.transcript));
                 runOnUiThread(() -> show(Shelf.video(db, id)));
             } catch (Exception e) {
                 String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> title.setText(message));
+                runOnUiThread(() -> status.setText(message));
             } finally {
                 if (side != null) {
                     side.delete();
@@ -544,7 +553,7 @@ public final class MainActivity extends AppCompatActivity {
                     long mb = got / (1024 * 1024);
                     if (mb != reported) {
                         reported = mb;
-                        runOnUiThread(() -> title.setText(label + " " + mb + " MB"));
+                        runOnUiThread(() -> status.setText(label + " " + mb + " MB"));
                     }
                 }
             }
@@ -691,9 +700,35 @@ public final class MainActivity extends AppCompatActivity {
                     // One bookmark failing leaves the others.
                 }
             }
+            if (fresh.isEmpty()) {
+                runOnUiThread(() -> {
+                    exploreSession = null;
+                    showExplore(fresh, "No new videos");
+                });
+                return;
+            }
+            int withText = 0;
+            int failed = 0;
+            for (int i = 0; i < fresh.size(); i++) {
+                int at = i + 1;
+                int total = fresh.size();
+                runOnUiThread(() -> exploreStatus.setText("Check " + at + " of " + total));
+                try {
+                    if (capture(fresh.get(i).url, false).captions) {
+                        withText++;
+                    }
+                } catch (Exception ignored) {
+                    failed++;
+                }
+            }
+            int found = withText;
+            int missed = failed;
             runOnUiThread(() -> {
                 exploreSession = null;
-                showExplore(fresh, "New");
+                showExplore(fresh, "Checked " + found + " with captions");
+                if (missed > 0) {
+                    exploreStatus.setText(exploreStatus.getText() + " · " + missed + " failed");
+                }
             });
         });
     }
@@ -780,10 +815,10 @@ public final class MainActivity extends AppCompatActivity {
     private void openChannel() {
         String url = Shelf.channelUrl(db, videoId);
         if (url.isEmpty()) {
-            title.setText("No channel URL for this video");
+            status.setText("No channel URL for this video");
             return;
         }
-        title.setText("Opening channel");
+        status.setText("Opening channel");
         io.execute(() -> {
             try {
                 org.schabi.newpipe.extractor.StreamingService service = NewPipe.getServiceByUrl(url);
@@ -791,7 +826,7 @@ public final class MainActivity extends AppCompatActivity {
                 runOnUiThread(() -> showSession(session, service.getServiceInfo().getName()));
             } catch (Exception e) {
                 String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> title.setText(message));
+                runOnUiThread(() -> status.setText(message));
             }
         });
     }
@@ -804,10 +839,10 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (pageUrl == null || pageUrl.isEmpty()) {
-            title.setText("No source is stored for this video");
+            status.setText("No source is stored for this video");
             return;
         }
-        title.setText("Opening");
+        status.setText("Opening");
         String page = pageUrl;
         long id = videoId;
         io.execute(() -> {
@@ -820,7 +855,7 @@ public final class MainActivity extends AppCompatActivity {
                 Shelf.setPlayUrl(db, id, fresh);
                 runOnUiThread(() -> play(fresh, t0));
             } catch (Exception e) {
-                runOnUiThread(() -> title.setText("This video is gone"));
+                runOnUiThread(() -> status.setText("This video is gone"));
             }
         });
     }
@@ -838,10 +873,10 @@ public final class MainActivity extends AppCompatActivity {
 
     private void keep() {
         if (pageUrl == null || pageUrl.isEmpty()) {
-            title.setText("Nothing to keep");
+            status.setText("Nothing to keep");
             return;
         }
-        title.setText("Saving");
+        status.setText("Saving");
         String page = pageUrl;
         long id = videoId;
         io.execute(() -> {
@@ -883,7 +918,7 @@ public final class MainActivity extends AppCompatActivity {
                             long mb = got / (1024 * 1024);
                             if (mb != reported) {
                                 reported = mb;
-                                runOnUiThread(() -> title.setText("Saving " + mb + " MB"));
+                                runOnUiThread(() -> status.setText("Saving " + mb + " MB"));
                             }
                         }
                     }
@@ -893,12 +928,12 @@ public final class MainActivity extends AppCompatActivity {
                 }
                 Shelf.setLocalPath(db, id, dest.getAbsolutePath());
                 runOnUiThread(() -> {
-                    title.setText("Kept " + dest.getName());
+                    status.setText("Kept " + dest.getName());
                     reloadDownloads();
                 });
             } catch (Exception e) {
                 String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> title.setText(message));
+                runOnUiThread(() -> status.setText(message));
             }
         });
     }
@@ -1056,67 +1091,159 @@ public final class MainActivity extends AppCompatActivity {
 
     private void fetch(String page) {
         if (page.isEmpty()) {
-            title.setText("Paste a video URL");
+            status.setText("Paste a video URL");
             return;
         }
-        title.setText("Fetching");
+        status.setText("Fetching");
         io.execute(() -> {
             try {
-                StreamingService service = NewPipe.getServiceByUrl(page);
-                StreamInfo info = StreamInfo.getInfo(service, page);
-                List<SubtitlesStream> subs = info.getSubtitles();
-                List<Shelf.TrackIn> incoming = new ArrayList<>();
-                int total = subs == null ? 0 : subs.size();
-                String lastError = null;
-                for (int i = 0; i < total; i++) {
-                    SubtitlesStream track = subs.get(i);
-                    int at = i + 1;
-                    runOnUiThread(() -> title.setText("Caption " + at + " of " + total));
-                    try {
-                        String raw = track.isUrl()
-                                ? NewPipe.getDownloader().get(track.getContent()).responseBody()
-                                : track.getContent();
-                        MediaFormat format = track.getFormat();
-                        Cues.Transcript transcript = Cues.parse(
-                                raw, format == null ? null : format.suffix, track.isAutoGenerated());
-                        if (transcript.spans.isEmpty()) {
-                            continue;
-                        }
-                        String lang = track.getLanguageTag() == null ? "" : track.getLanguageTag();
-                        String kind = track.isAutoGenerated() ? "auto" : "manual";
-                        String label = lang + " · " + kind;
-                        if (track.getName() != null && !track.getName().isEmpty()) {
-                            label = track.getName() + " · " + label;
-                        }
-                        incoming.add(new Shelf.TrackIn(lang, transcript.source, label, transcript));
-                    } catch (Exception e) {
-                        lastError = e.getClass().getSimpleName() + ": " + e.getMessage();
+                Held held = capture(page, true);
+                runOnUiThread(() -> {
+                    show(held.video);
+                    if (!held.captions) {
+                        status.setText(held.note);
                     }
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    /** Saves one video. Captions are optional, so a later Check does not list it again. */
+    private Held capture(String page, boolean report) throws Exception {
+        StreamingService service = NewPipe.getServiceByUrl(page);
+        StreamInfo info = StreamInfo.getInfo(service, page);
+        List<SubtitlesStream> subs = info.getSubtitles();
+        List<Shelf.TrackIn> incoming = new ArrayList<>();
+        int total = subs == null ? 0 : subs.size();
+        String lastError = null;
+        for (int i = 0; i < total; i++) {
+            SubtitlesStream track = subs.get(i);
+            if (report) {
+                int at = i + 1;
+                runOnUiThread(() -> status.setText("Caption " + at + " of " + total));
+            }
+            try {
+                String raw = track.isUrl()
+                        ? NewPipe.getDownloader().get(track.getContent()).responseBody()
+                        : track.getContent();
+                MediaFormat format = track.getFormat();
+                Cues.Transcript transcript = Cues.parse(
+                        raw, format == null ? null : format.suffix, track.isAutoGenerated());
+                if (transcript.spans.isEmpty()) {
+                    continue;
                 }
-                if (incoming.isEmpty()) {
-                    String why = lastError == null ? "none parsed" : lastError;
-                    String message = "No captions (" + total + " tracks, " + why + ")";
-                    runOnUiThread(() -> title.setText(message));
-                    return;
+                String lang = track.getLanguageTag() == null ? "" : track.getLanguageTag();
+                String kind = track.isAutoGenerated() ? "auto" : "manual";
+                String label = lang + " · " + kind;
+                if (track.getName() != null && !track.getName().isEmpty()) {
+                    label = track.getName() + " · " + label;
                 }
-                String channelKey = channelKey(info.getUploaderUrl(), info.getUploaderName());
-                long id = Shelf.save(
-                        db,
-                        service.getServiceInfo().getName(),
-                        channelKey,
-                        blank(info.getUploaderName(), "Unknown"),
-                        info.getUploaderUrl() == null ? "" : info.getUploaderUrl(),
-                        info.getId(),
-                        blank(info.getName(), page),
-                        page,
-                        playUrl(info),
-                        incoming);
-                Shelf.setThumb(db, id, Browse.thumbnailOf(info.getThumbnails()));
+                incoming.add(new Shelf.TrackIn(lang, transcript.source, label, transcript));
+            } catch (Exception e) {
+                lastError = e.getClass().getSimpleName() + ": " + e.getMessage();
+            }
+        }
+        String channelKey = channelKey(info.getUploaderUrl(), info.getUploaderName());
+        long id = Shelf.save(
+                db,
+                service.getServiceInfo().getName(),
+                channelKey,
+                blank(info.getUploaderName(), "Unknown"),
+                info.getUploaderUrl() == null ? "" : info.getUploaderUrl(),
+                info.getId(),
+                blank(info.getName(), page),
+                page,
+                playUrl(info),
+                incoming);
+        Shelf.setThumb(db, id, Browse.thumbnailOf(info.getThumbnails()));
+        String note = lastError == null ? "No captions" : "No captions (" + lastError + ")";
+        return new Held(Shelf.video(db, id), !incoming.isEmpty(), note);
+    }
+
+    private static final class Held {
+        final Shelf.Video video;
+        final boolean captions;
+        final String note;
+
+        Held(Shelf.Video video, boolean captions, String note) {
+            this.video = video;
+            this.captions = captions;
+            this.note = note;
+        }
+    }
+
+    private void translate() {
+        if (tracks.isEmpty()) {
+            status.setText("No transcript to translate");
+            return;
+        }
+        int primary = chosen(0);
+        if (primary < 0) {
+            primary = 0;
+        }
+        String tag = tracks.get(primary).lang;
+        String source = TranslateLanguage.fromLanguageTag(tag);
+        if (source == null && tag != null && tag.length() >= 2) {
+            source = TranslateLanguage.fromLanguageTag(tag.substring(0, 2));
+        }
+        if (source == null) {
+            status.setText("No translation model for " + tag);
+            return;
+        }
+        String[] labels = {
+                "English", "Spanish", "German", "French", "Portuguese",
+                "Chinese", "Japanese", "Korean", "Russian"
+        };
+        String[] codes = {
+                TranslateLanguage.ENGLISH, TranslateLanguage.SPANISH, TranslateLanguage.GERMAN,
+                TranslateLanguage.FRENCH, TranslateLanguage.PORTUGUESE, TranslateLanguage.CHINESE,
+                TranslateLanguage.JAPANESE, TranslateLanguage.KOREAN, TranslateLanguage.RUSSIAN
+        };
+        String from = source;
+        long trackId = tracks.get(primary).id;
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(R.string.translate)
+                .setItems(labels, (dialog, which) -> translateInto(trackId, from, codes[which]))
+                .show();
+    }
+
+    private void translateInto(long trackId, String source, String target) {
+        if (source.equals(target)) {
+            status.setText("Already that language");
+            return;
+        }
+        status.setText("Translation model");
+        List<Cues.Span> sourceSpans = Shelf.readSpans(db, trackId);
+        long id = videoId;
+        io.execute(() -> {
+            Translator translator = null;
+            try {
+                translator = Translation.getClient(new TranslatorOptions.Builder()
+                        .setSourceLanguage(source)
+                        .setTargetLanguage(target)
+                        .build());
+                Tasks.await(translator.downloadModelIfNeeded());
+                List<String> lines = new ArrayList<>();
+                for (int i = 0; i < sourceSpans.size(); i++) {
+                    int at = i + 1;
+                    runOnUiThread(() -> status.setText("Translate " + at + " of " + sourceSpans.size()));
+                    lines.add(Tasks.await(translator.translate(sourceSpans.get(i).text)));
+                }
+                Cues.Transcript transcript = Cues.withLines(sourceSpans, lines, "translation");
+                Shelf.addTrack(db, id, new Shelf.TrackIn(
+                        target, "translation", target + " · translation", transcript));
                 Shelf.Video video = Shelf.video(db, id);
                 runOnUiThread(() -> show(video));
             } catch (Exception e) {
                 String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> title.setText(message));
+                runOnUiThread(() -> status.setText(message));
+            } finally {
+                if (translator != null) {
+                    translator.close();
+                }
             }
         });
     }
@@ -1135,6 +1262,7 @@ public final class MainActivity extends AppCompatActivity {
         tracks = Shelf.readTracks(db, video.id);
         String heading = video.channel + " — " + video.title;
         title.setText(heading);
+        status.setText("");
         ((Button) findViewById(R.id.channel)).setText(video.channel);
         relatedMode = false;
         related = Collections.emptyList();
@@ -1323,14 +1451,14 @@ public final class MainActivity extends AppCompatActivity {
                 }
             }
             if (index < 0) {
-                title.setText("No hit");
+                status.setText("No hit");
                 return;
             }
             lines.setItemChecked(index, true);
             lines.smoothScrollToPosition(index);
             seek(spans.get(index).t0);
         } catch (RuntimeException e) {
-            title.setText(e.getMessage());
+            status.setText(e.getMessage());
         }
     }
 

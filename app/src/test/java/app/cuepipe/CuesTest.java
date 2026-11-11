@@ -2,6 +2,7 @@ package app.cuepipe;
 
 import org.junit.Test;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
@@ -130,5 +131,15 @@ public final class CuesTest {
         String vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n東京\n";
         Cues.Transcript t = Cues.parse(vtt, "vtt", false);
         assertEquals(6, t.spans.get(0).byteLen);
+    }
+
+    @Test
+    public void translatedLinesKeepTheTimes() {
+        List<Cues.Span> spans = Arrays.asList(new Cues.Span(0, 1500, 0, 5, "hello"));
+        Cues.Transcript out = Cues.withLines(spans, Arrays.asList("hola"), "translation");
+        assertEquals("translation", out.source);
+        assertEquals(0, out.spans.get(0).t0);
+        assertEquals(1500, out.spans.get(0).t1);
+        assertEquals("hola", out.spans.get(0).text);
     }
 }

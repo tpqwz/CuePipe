@@ -147,6 +147,14 @@
                     android:paddingTop="4dp"
                     android:textAppearance="?android:attr/textAppearanceMedium" />
 
+                <TextView
+                    android:id="@+id/status"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:textAppearance="?android:attr/textAppearanceSmall" />
+
                 <Button
                     android:id="@+id/channel"
                     style="?attr/borderlessButtonStyle"
@@ -159,40 +167,51 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:gravity="center"
                     android:orientation="horizontal">
 
-                    <ImageButton
+                    <Button
                         android:id="@+id/keep"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:background="?attr/selectableItemBackgroundBorderless"
-                        android:contentDescription="@string/keep"
-                        android:src="@android:drawable/ic_menu_save" />
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/keep"
+                        android:textSize="12sp" />
 
-                    <ImageButton
+                    <Button
                         android:id="@+id/burned"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:background="?attr/selectableItemBackgroundBorderless"
-                        android:contentDescription="@string/burned"
-                        android:src="@android:drawable/ic_menu_camera" />
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/burned"
+                        android:textSize="12sp" />
 
-                    <ImageButton
+                    <Button
                         android:id="@+id/recognize"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:background="?attr/selectableItemBackgroundBorderless"
-                        android:contentDescription="@string/recognize"
-                        android:src="@android:drawable/ic_btn_speak_now" />
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/recognize"
+                        android:textSize="12sp" />
 
                     <CheckBox
                         android:id="@+id/on_screen"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:background="?attr/selectableItemBackgroundBorderless"
-                        android:button="@android:drawable/ic_menu_view"
-                        android:contentDescription="@string/on_screen" />
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/on_screen"
+                        android:textSize="12sp" />
+
+                    <Button
+                        android:id="@+id/translate"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/translate"
+                        android:textSize="12sp" />
                 </LinearLayout>
 
                 <LinearLayout
@@ -358,31 +377,17 @@
                 android:orientation="horizontal">
 
                 <Button
-                    android:id="@+id/explore_back"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/back" />
-
-                <Button
                     android:id="@+id/explore_marks"
-                    android:layout_width="0dp"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
                     android:text="@string/bookmarks" />
 
                 <Button
-                    android:id="@+id/explore_more"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/more" />
-
-                <Button
                     android:id="@+id/explore_check"
-                    android:layout_width="0dp"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
                     android:text="@string/check" />
             </LinearLayout>
 
@@ -391,6 +396,26 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingTop="4dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/explore_back"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/back" />
+
+                <Button
+                    android:id="@+id/explore_more"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/more" />
+            </LinearLayout>
 
             <ListView
                 android:id="@+id/explore"

@@ -101,6 +101,34 @@ public final class ShelfFtsTest {
         assertEquals("edited", Shelf.readTracks(db, runId).get(0).source);
         assertTrue(Shelf.searchByte(db, runTrack, "jogging") >= 0);
         assertEquals(-1, Shelf.searchByte(db, runTrack, "running"));
+        Cues.Transcript fresh = Cues.parse(
+                "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nfresh words\n", "vtt", false);
+        Cues.Transcript japanese = Cues.parse(
+                "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n新しい\n", "vtt", true);
+        Shelf.save(db, "YouTube", "UCrun", "Runner",
+                "https://example.test/runner", "run",
+                "Running", "https://example.test/run", "https://example.test/run.m3u8",
+                List.of(
+                        new Shelf.TrackIn("en", "manual", "en · manual", fresh),
+                        new Shelf.TrackIn("ja", "auto", "ja · auto", japanese)));
+        List<Shelf.Track> after = Shelf.readTracks(db, runId);
+        assertEquals(2, after.size());
+        boolean sawEdit = false;
+        boolean sawJapanese = false;
+        for (Shelf.Track track : after) {
+            if ("edited".equals(track.source)) {
+                sawEdit = true;
+                assertEquals("jogging", Shelf.readSpans(db, track.id).get(0).text);
+            }
+            if ("ja".equals(track.lang)) {
+                sawJapanese = true;
+            }
+            assertEquals(false, "fresh words".equals(
+                    Shelf.readSpans(db, track.id).isEmpty()
+                            ? "" : Shelf.readSpans(db, track.id).get(0).text));
+        }
+        assertTrue(sawEdit);
+        assertTrue(sawJapanese);
         c.close();
     }
 

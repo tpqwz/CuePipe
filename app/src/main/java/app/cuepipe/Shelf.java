@@ -148,8 +148,9 @@ public final class Shelf {
     }
 
     /**
-     * Stores every caption track of one video. A video already on the shelf is replaced.
-     * shortcut: an edited transcript is replaced too; edits are not stored yet.
+     * Stores the caption tracks of one video. A video already on the shelf drops its
+     * unedited caption tracks and keeps an edited track, plus speech, burned-in, and
+     * translation tracks. An incoming caption in a language that was edited is skipped.
      * shortcut: the FTS4 delete command errors on this SQLite, so a replace rebuilds the index.
      */
     public static long save(Sql db, String service, String channelKey, String channelName,
@@ -179,16 +180,24 @@ public final class Shelf {
             videoId = db.num("SELECT last_insert_rowid()");
         } else {
             videoId = Long.parseLong(existing);
-            db.exec("DELETE FROM span WHERE track_id IN (SELECT id FROM track WHERE video_id=?)",
+            db.exec("DELETE FROM span WHERE track_id IN (SELECT id FROM track WHERE video_id=? "
+                            + "AND source IN ('manual','auto'))",
                     videoId);
-            db.exec("DELETE FROM docs WHERE docid IN (SELECT id FROM track WHERE video_id=?)",
+            db.exec("DELETE FROM docs WHERE docid IN (SELECT id FROM track WHERE video_id=? "
+                            + "AND source IN ('manual','auto'))",
                     videoId);
-            db.exec("DELETE FROM track WHERE video_id=?", videoId);
+            db.exec("DELETE FROM vec WHERE track_id IN (SELECT id FROM track WHERE video_id=? "
+                            + "AND source IN ('manual','auto'))",
+                    videoId);
+            db.exec("DELETE FROM track WHERE video_id=? AND source IN ('manual','auto')", videoId);
             db.exec("UPDATE video SET channel_id=?, title=?, url=?, play_url=? WHERE id=?",
                     channelId, title, pageUrl, playUrl, videoId);
         }
 
         for (TrackIn track : tracks) {
+            if (sameLanguageEdited(db, videoId, track)) {
+                continue;
+            }
             db.exec("INSERT INTO track(video_id, lang, source, label) VALUES(?,?,?,?)",
                     videoId, track.lang, track.source, track.label);
             long trackId = db.num("SELECT last_insert_rowid()");
@@ -219,10 +228,7 @@ public final class Shelf {
         db.exec("INSERT INTO fts(fts) VALUES('rebuild')");
     }
 
-    /**
-     * Replaces the words of one span. Times stay. The track is marked edited.
-     * shortcut: the next fetch of this video still replaces an edited track.
-     */
+    /** Replaces the words of one span. Times stay. The track is marked edited. */
     public static void editSpan(Sql db, SqlRows rows, long trackId, int index, String text) {
         List<Cues.Span> spans = readSpans(rows, trackId);
         if (index < 0 || index >= spans.size()) {
@@ -245,6 +251,19 @@ public final class Shelf {
         db.exec("UPDATE docs SET body=? WHERE docid=?", body.toString(), trackId);
         db.exec("UPDATE track SET source='edited' WHERE id=?", trackId);
         db.exec("INSERT INTO fts(fts) VALUES('rebuild')");
+    }
+
+    private static boolean sameLanguageEdited(Sql db, long videoId, TrackIn track) {
+        if (track.lang == null || track.lang.isEmpty()) {
+            return false;
+        }
+        if (!"manual".equals(track.source) && !"auto".equals(track.source)) {
+            return false;
+        }
+        String kept = db.text(
+                "SELECT id FROM track WHERE video_id=? AND source='edited' AND lower(lang)=lower(?)",
+                videoId, track.lang);
+        return kept != null;
     }
 
     public static String channelUrl(Sql db, long videoId) {

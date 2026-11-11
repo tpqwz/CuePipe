@@ -104,6 +104,25 @@ public final class Cues {
         return best;
     }
 
+    /** Same times as the source spans, with new words. Bytes are recounted. */
+    public static Transcript withLines(List<Span> spans, List<String> lines, String source) {
+        StringBuilder body = new StringBuilder();
+        List<Span> out = new ArrayList<>();
+        int n = Math.min(spans == null ? 0 : spans.size(), lines == null ? 0 : lines.size());
+        for (int i = 0; i < n; i++) {
+            String line = lines.get(i) == null ? "" : lines.get(i).trim();
+            if (body.length() > 0) {
+                body.append('\n');
+            }
+            int start = body.toString().getBytes(StandardCharsets.UTF_8).length;
+            body.append(line);
+            int end = body.toString().getBytes(StandardCharsets.UTF_8).length;
+            Span span = spans.get(i);
+            out.add(new Span(span.t0, span.t1, start, end - start, line));
+        }
+        return new Transcript(source, body.toString(), out);
+    }
+
     /**
      * The span that contains timeMs. In a gap, the latest span that has already
      * started, so the reader stays on the line the playhead just left. Before the
