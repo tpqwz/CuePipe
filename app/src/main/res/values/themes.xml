@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.CuePipe" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="colorPrimary">@color/primary</item>
+        <!-- The toolbar stays dark on its own. Primary is the accent, so a
+             text button is not painted in toolbar gray on a dark page. -->
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorPrimaryDark">@color/primary</item>
+        <item name="colorOnPrimary">@android:color/white</item>
         <item name="colorSecondary">@color/accent</item>
+        <item name="borderlessButtonStyle">@style/Widget.CuePipe.Button.Text</item>
         <item name="android:statusBarColor">@color/primary</item>
-        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <style name="Widget.CuePipe.Button.Text" parent="Widget.Material3.Button.TextButton">
+        <item name="android:textColor">?attr/colorOnSurface</item>
     </style>
 </resources>
