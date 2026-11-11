@@ -31,7 +31,8 @@ public final class ShelfFtsTest {
         List<Shelf.TrackIn> tracks = List.of(
                 new Shelf.TrackIn("en", en.source, "en · manual", en),
                 new Shelf.TrackIn("ja", ja.source, "ja · auto", ja));
-        long id = Shelf.save(db, "SoundCloud", "UCtest", "Example", "vid",
+        long id = Shelf.save(db, "SoundCloud", "UCtest", "Example",
+                "https://example.test/channel", "vid",
                 "A talk", "https://example.test/watch?v=vid",
                 "https://example.test/play.m3u8", tracks);
         List<Shelf.Track> stored = Shelf.readTracks(db, id);
@@ -44,7 +45,8 @@ public final class ShelfFtsTest {
 
         Cues.Transcript replaced = Cues.parse(
                 "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nonly alpha\n", "vtt", false);
-        long again = Shelf.save(db, "SoundCloud", "UCtest", "Example", "vid",
+        long again = Shelf.save(db, "SoundCloud", "UCtest", "Example",
+                "https://example.test/channel", "vid",
                 "A talk", "https://example.test/watch?v=vid",
                 "https://example.test/play.m3u8",
                 List.of(new Shelf.TrackIn("en", "manual", "en · manual", replaced)));
@@ -60,7 +62,7 @@ public final class ShelfFtsTest {
 
         Cues.Transcript other = Cues.parse(
                 "WEBVTT\n\n00:00:02.000 --> 00:00:03.000\nzebra stripe\n", "vtt", false);
-        Shelf.save(db, "YouTube", "UCother", "Other", "other",
+        Shelf.save(db, "YouTube", "UCother", "Other", "https://example.test/other", "other",
                 "Zebra hour", "https://example.test/z", "https://example.test/z.m3u8",
                 List.of(new Shelf.TrackIn("en", "manual", "en · manual", other)));
         List<Shelf.Video> byTitle = Shelf.list(db, Shelf.SORT_TITLE, null);
@@ -85,11 +87,20 @@ public final class ShelfFtsTest {
         kept.delete();
         Cues.Transcript running = Cues.parse(
                 "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nrunning\n", "vtt", false);
-        long runId = Shelf.save(db, "YouTube", "UCrun", "Runner", "run",
+        long runId = Shelf.save(db, "YouTube", "UCrun", "Runner",
+                "https://example.test/runner", "run",
                 "Running", "https://example.test/run", "https://example.test/run.m3u8",
                 List.of(new Shelf.TrackIn("en", "manual", "en", running)));
         long runTrack = Shelf.readTracks(db, runId).get(0).id;
         assertTrue(Shelf.searchByte(db, runTrack, "run") >= 0);
+        assertEquals("https://example.test/runner", Shelf.channelUrl(db, runId));
+        Shelf.editSpan(db, db, runTrack, 0, "jogging");
+        List<Cues.Span> edited = Shelf.readSpans(db, runTrack);
+        assertEquals("jogging", edited.get(0).text);
+        assertEquals(1000, edited.get(0).t0);
+        assertEquals("edited", Shelf.readTracks(db, runId).get(0).source);
+        assertTrue(Shelf.searchByte(db, runTrack, "jogging") >= 0);
+        assertEquals(-1, Shelf.searchByte(db, runTrack, "running"));
         c.close();
     }
 

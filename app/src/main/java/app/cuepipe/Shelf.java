@@ -87,6 +87,7 @@ public final class Shelf {
                     + "service TEXT NOT NULL,"
                     + "key TEXT NOT NULL,"
                     + "name TEXT NOT NULL,"
+                    + "url TEXT NOT NULL DEFAULT '',"
                     + "UNIQUE(service, key))",
             "CREATE TABLE video ("
                     + "id INTEGER PRIMARY KEY,"
@@ -137,19 +138,20 @@ public final class Shelf {
      * shortcut: the FTS4 delete command errors on this SQLite, so a replace rebuilds the index.
      */
     public static long save(Sql db, String service, String channelKey, String channelName,
-                            String videoKey, String title, String pageUrl, String playUrl,
-                            List<TrackIn> tracks) {
+                            String channelUrl, String videoKey, String title, String pageUrl,
+                            String playUrl, List<TrackIn> tracks) {
         // API 26 ships SQLite 3.18, which has no UPSERT. Look up, then write.
         String haveChannel = db.text(
                 "SELECT id FROM channel WHERE service=? AND key=?", service, channelKey);
         long channelId;
         if (haveChannel == null) {
-            db.exec("INSERT INTO channel(service, key, name) VALUES(?,?,?)",
-                    service, channelKey, channelName);
+            db.exec("INSERT INTO channel(service, key, name, url) VALUES(?,?,?,?)",
+                    service, channelKey, channelName, channelUrl == null ? "" : channelUrl);
             channelId = db.num("SELECT last_insert_rowid()");
         } else {
             channelId = Long.parseLong(haveChannel);
-            db.exec("UPDATE channel SET name=? WHERE id=?", channelName, channelId);
+            db.exec("UPDATE channel SET name=?, url=? WHERE id=?",
+                    channelName, channelUrl == null ? "" : channelUrl, channelId);
         }
 
         String existing = db.text(
@@ -200,6 +202,42 @@ public final class Shelf {
                     trackId, i, span.t0, span.t1, span.byteStart, span.byteLen, span.text);
         }
         db.exec("INSERT INTO fts(fts) VALUES('rebuild')");
+    }
+
+    /**
+     * Replaces the words of one span. Times stay. The track is marked edited.
+     * shortcut: the next fetch of this video still replaces an edited track.
+     */
+    public static void editSpan(Sql db, SqlRows rows, long trackId, int index, String text) {
+        List<Cues.Span> spans = readSpans(rows, trackId);
+        if (index < 0 || index >= spans.size()) {
+            return;
+        }
+        String cleaned = text == null ? "" : text.trim();
+        StringBuilder body = new StringBuilder();
+        for (int i = 0; i < spans.size(); i++) {
+            Cues.Span span = spans.get(i);
+            String line = i == index ? cleaned : span.text;
+            if (body.length() > 0) {
+                body.append('\n');
+            }
+            int start = body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            body.append(line);
+            int end = body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            db.exec("UPDATE span SET text=?, byte_start=?, byte_len=? WHERE track_id=? AND idx=?",
+                    line, start, end - start, trackId, i);
+        }
+        db.exec("UPDATE docs SET body=? WHERE docid=?", body.toString(), trackId);
+        db.exec("UPDATE track SET source='edited' WHERE id=?", trackId);
+        db.exec("INSERT INTO fts(fts) VALUES('rebuild')");
+    }
+
+    public static String channelUrl(Sql db, long videoId) {
+        String url = db.text(
+                "SELECT channel.url FROM channel JOIN video ON video.channel_id = channel.id "
+                        + "WHERE video.id=?",
+                videoId);
+        return url == null ? "" : url;
     }
 
     public static Video latest(Sql db) {
@@ -303,6 +341,19 @@ public final class Shelf {
         List<String[]> raw = filter ? rows.rows(sql, service) : rows.rows(sql);
         List<Video> out = new ArrayList<>();
         for (String[] row : raw) {
+            out.add(new Video(
+                    Long.parseLong(row[0]), row[1], row[2], row[4], row[5], row[3]));
+        }
+        return out;
+    }
+
+    public static List<Video> kept(SqlRows rows) {
+        String sql = "SELECT video.id, video.title, channel.name, video.service, "
+                + "video.play_url, video.url FROM video "
+                + "JOIN channel ON channel.id = video.channel_id "
+                + "WHERE video.local_path != '' ORDER BY video.id DESC";
+        List<Video> out = new ArrayList<>();
+        for (String[] row : rows.rows(sql)) {
             out.add(new Video(
                     Long.parseLong(row[0]), row[1], row[2], row[4], row[5], row[3]));
         }
@@ -415,7 +466,7 @@ public final class Shelf {
 
     private static final class Db extends SQLiteOpenHelper {
         Db(Context context) {
-            super(context, "cuepipe.db", null, 3);
+            super(context, "cuepipe.db", null, 4);
         }
 
         @Override
@@ -435,6 +486,9 @@ public final class Shelf {
                 db.execSQL("DROP TABLE IF EXISTS fts");
                 execFts(db, "CREATE VIRTUAL TABLE fts USING fts4(content='docs', body, tokenize=porter)");
                 db.execSQL("INSERT INTO fts(fts) VALUES('rebuild')");
+            }
+            if (oldVersion < 4) {
+                db.execSQL("ALTER TABLE channel ADD COLUMN url TEXT NOT NULL DEFAULT ''");
             }
         }
 

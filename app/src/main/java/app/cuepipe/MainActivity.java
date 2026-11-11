@@ -48,7 +48,6 @@ public final class MainActivity extends AppCompatActivity {
     private Shelf.AndroidSql db;
     private ExoPlayer player;
     private TextView title;
-    private TextView readerTitle;
     private TextView burn;
     private TextView libraryStatus;
     private ListView library;
@@ -56,13 +55,17 @@ public final class MainActivity extends AppCompatActivity {
     private Spinner sortBy;
     private Spinner filterService;
     private View panelLibrary;
-    private View panelReader;
     private View panelWatch;
     private View panelExplore;
+    private View panelDownloads;
+    private Button tabHome;
     private Button tabLibrary;
-    private Button tabReader;
-    private Button tabWatch;
-    private Button tabExplore;
+    private Button tabDownloads;
+    private ListView downloadsView;
+    private TextView downloadsStatus;
+    private List<Shelf.Video> keptVideos = Collections.emptyList();
+    private int section;
+    private boolean videoOpen;
     private ListView exploreList;
     private TextView exploreStatus;
     private EditText exploreQuery;
@@ -102,7 +105,6 @@ public final class MainActivity extends AppCompatActivity {
         shelf = new Shelf(this);
         db = shelf.sql();
         title = findViewById(R.id.title);
-        readerTitle = findViewById(R.id.reader_title);
         lines = findViewById(R.id.lines);
         library = findViewById(R.id.library);
         libraryQuery = findViewById(R.id.library_query);
@@ -110,13 +112,14 @@ public final class MainActivity extends AppCompatActivity {
         sortBy = findViewById(R.id.sort_by);
         filterService = findViewById(R.id.filter_service);
         panelLibrary = findViewById(R.id.panel_library);
-        panelReader = findViewById(R.id.panel_reader);
         panelWatch = findViewById(R.id.panel_watch);
         panelExplore = findViewById(R.id.panel_explore);
+        panelDownloads = findViewById(R.id.panel_downloads);
+        tabHome = findViewById(R.id.tab_home);
         tabLibrary = findViewById(R.id.tab_library);
-        tabReader = findViewById(R.id.tab_reader);
-        tabWatch = findViewById(R.id.tab_watch);
-        tabExplore = findViewById(R.id.tab_explore);
+        tabDownloads = findViewById(R.id.tab_downloads);
+        downloadsView = findViewById(R.id.downloads);
+        downloadsStatus = findViewById(R.id.downloads_status);
         exploreList = findViewById(R.id.explore);
         exploreStatus = findViewById(R.id.explore_status);
         exploreQuery = findViewById(R.id.explore_query);
@@ -167,12 +170,34 @@ public final class MainActivity extends AppCompatActivity {
         fetch.setOnClickListener(v -> fetch(url.getText().toString().trim(), fetch));
         find.setOnClickListener(v -> find(query.getText().toString().trim()));
         lines.setOnItemClickListener((parent, view, position, id) -> jump(spans.get(position).t0));
-        tabLibrary.setOnClickListener(v -> showTab(0));
-        tabReader.setOnClickListener(v -> showTab(1));
-        tabWatch.setOnClickListener(v -> showTab(2));
-        tabExplore.setOnClickListener(v -> {
+        lines.setOnItemLongClickListener((parent, view, position, id) -> {
+            editLine(position);
+            return true;
+        });
+        findViewById(R.id.channel).setOnClickListener(v -> openChannel());
+        tabHome.setOnClickListener(v -> {
             fillExploreServices();
-            showTab(3);
+            showTab(0);
+        });
+        tabLibrary.setOnClickListener(v -> showTab(1));
+        tabDownloads.setOnClickListener(v -> showTab(2));
+        downloadsView.setOnItemClickListener((parent, view, position, id) -> {
+            if (position < 0 || position >= keptVideos.size()) {
+                return;
+            }
+            show(keptVideos.get(position));
+            showVideo();
+        });
+        getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (videoOpen) {
+                    showTab(section);
+                } else {
+                    setEnabled(false);
+                    getOnBackPressedDispatcher().onBackPressed();
+                }
+            }
         });
         findViewById(R.id.explore_search).setOnClickListener(v -> exploreSearch());
         findViewById(R.id.explore_marks).setOnClickListener(v -> showBookmarks());
@@ -235,18 +260,38 @@ public final class MainActivity extends AppCompatActivity {
             fillServices();
             reloadLibrary();
         }
+        fillExploreServices();
         showTab(0);
     }
 
     private void showTab(int tab) {
-        panelLibrary.setVisibility(tab == 0 ? View.VISIBLE : View.GONE);
-        panelReader.setVisibility(tab == 1 ? View.VISIBLE : View.GONE);
-        panelWatch.setVisibility(tab == 2 ? View.VISIBLE : View.GONE);
-        panelExplore.setVisibility(tab == 3 ? View.VISIBLE : View.GONE);
-        tabLibrary.setEnabled(tab != 0);
-        tabReader.setEnabled(tab != 1);
-        tabWatch.setEnabled(tab != 2);
-        tabExplore.setEnabled(tab != 3);
+        section = tab;
+        videoOpen = false;
+        if (tab == 2) {
+            reloadDownloads();
+        }
+        applyChrome();
+    }
+
+    private void showVideo() {
+        videoOpen = true;
+        applyChrome();
+    }
+
+    private void applyChrome() {
+        panelExplore.setVisibility(!videoOpen && section == 0 ? View.VISIBLE : View.GONE);
+        panelLibrary.setVisibility(!videoOpen && section == 1 ? View.VISIBLE : View.GONE);
+        panelDownloads.setVisibility(!videoOpen && section == 2 ? View.VISIBLE : View.GONE);
+        panelWatch.setVisibility(videoOpen ? View.VISIBLE : View.GONE);
+        tabHome.setEnabled(videoOpen || section != 0);
+        tabLibrary.setEnabled(videoOpen || section != 1);
+        tabDownloads.setEnabled(videoOpen || section != 2);
+    }
+
+    private void reloadDownloads() {
+        keptVideos = Shelf.kept(db);
+        downloadsStatus.setText(keptVideos.size() + " downloads");
+        downloadsView.setAdapter(new DownloadAdapter());
     }
 
     private void burned() {
@@ -343,7 +388,7 @@ public final class MainActivity extends AppCompatActivity {
         String more = exploreSession != null && exploreSession.next != null ? " · more" : "";
         exploreStatus.setText(label + " · " + rows.size() + more);
         exploreList.setAdapter(new ExploreAdapter());
-        showTab(3);
+        showTab(0);
     }
 
     private void more() {
@@ -431,7 +476,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void openVideo(String page) {
-        showTab(2);
+        showVideo();
         EditText url = findViewById(R.id.url);
         url.setText(page);
         fetch(page, findViewById(R.id.fetch));
@@ -453,8 +498,46 @@ public final class MainActivity extends AppCompatActivity {
         exploreStatus.setText("Bookmarked");
     }
 
+    private void editLine(int position) {
+        if (position < 0 || position >= spans.size() || chosen(0) < 0) {
+            return;
+        }
+        Cues.Span span = spans.get(position);
+        android.widget.EditText input = new android.widget.EditText(this);
+        input.setText(span.text);
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(stamp(span.t0))
+                .setView(input)
+                .setPositiveButton("Save", (dialog, which) -> {
+                    long trackId = tracks.get(chosen(0)).id;
+                    Shelf.editSpan(db, db, trackId, position, input.getText().toString());
+                    show(Shelf.video(db, videoId));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void openChannel() {
+        String url = Shelf.channelUrl(db, videoId);
+        if (url.isEmpty()) {
+            title.setText("No channel URL for this video");
+            return;
+        }
+        title.setText("Opening channel");
+        io.execute(() -> {
+            try {
+                org.schabi.newpipe.extractor.StreamingService service = NewPipe.getServiceByUrl(url);
+                Browse.Session session = Browse.channel(service, url);
+                runOnUiThread(() -> showSession(session, service.getServiceInfo().getName()));
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> title.setText(message));
+            }
+        });
+    }
+
     private void jump(int t0) {
-        showTab(2);
+        showVideo();
         String local = Shelf.prefer(Shelf.localPath(db, videoId), "");
         if (!local.isEmpty()) {
             play(local, t0);
@@ -549,7 +632,10 @@ public final class MainActivity extends AppCompatActivity {
                     throw e;
                 }
                 Shelf.setLocalPath(db, id, dest.getAbsolutePath());
-                runOnUiThread(() -> title.setText("Kept " + dest.getName()));
+                runOnUiThread(() -> {
+                    title.setText("Kept " + dest.getName());
+                    reloadDownloads();
+                });
             } catch (Exception e) {
                 String message = e.getClass().getSimpleName() + ": " + e.getMessage();
                 runOnUiThread(() -> title.setText(message));
@@ -564,7 +650,7 @@ public final class MainActivity extends AppCompatActivity {
             }
             Shelf.Hit hit = hits.get(position);
             show(Shelf.video(db, hit.videoId));
-            showTab(1);
+            showVideo();
             int index = indexOfHit(hit);
             if (index >= 0) {
                 lines.setItemChecked(index, true);
@@ -576,7 +662,7 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         show(shelfVideos.get(position));
-        showTab(1);
+        showVideo();
     }
 
     private int indexOfHit(Shelf.Hit hit) {
@@ -692,6 +778,7 @@ public final class MainActivity extends AppCompatActivity {
                         service.getServiceInfo().getName(),
                         channelKey,
                         blank(info.getUploaderName(), "Unknown"),
+                        info.getUploaderUrl() == null ? "" : info.getUploaderUrl(),
                         info.getId(),
                         blank(info.getName(), page),
                         page,
@@ -719,7 +806,6 @@ public final class MainActivity extends AppCompatActivity {
         tracks = Shelf.readTracks(db, video.id);
         String heading = video.service + " · " + video.channel + " — " + video.title;
         title.setText(heading);
-        readerTitle.setText(heading);
         fillServices();
         reloadLibrary();
         filling = true;
@@ -1029,6 +1115,36 @@ public final class MainActivity extends AppCompatActivity {
                 detail = item.kind + " · " + item.meta;
             }
             meta.setText(detail);
+            return row;
+        }
+    }
+
+    private final class DownloadAdapter extends BaseAdapter {
+        @Override
+        public int getCount() {
+            return keptVideos.size();
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return keptVideos.get(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(int position, View convert, ViewGroup parent) {
+            View row = convert == null
+                    ? getLayoutInflater().inflate(R.layout.library_row, parent, false)
+                    : convert;
+            Shelf.Video video = keptVideos.get(position);
+            TextView heading = row.findViewById(R.id.lib_title);
+            TextView meta = row.findViewById(R.id.lib_meta);
+            heading.setText(video.channel + " — " + video.title);
+            meta.setText(video.service);
             return row;
         }
     }
