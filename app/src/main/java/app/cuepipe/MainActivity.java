@@ -112,6 +112,7 @@ public final class MainActivity extends AppCompatActivity {
     private int offsetMs;
     private boolean mini;
     private List<Prose.Block> blocks = Collections.emptyList();
+    private List<Cast.Episode> episodes = Collections.emptyList();
     private final Runnable playTick = new Runnable() {
         @Override
         public void run() {
@@ -587,6 +588,141 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    /** Downloads the episode file when the page is not a video service. */
+    private void keepDirect(String source, long id) {
+        if (source == null || source.isEmpty() || source.startsWith("/")) {
+            status.setText("Nothing to keep");
+            return;
+        }
+        io.execute(() -> {
+            java.io.File dir = getExternalFilesDir("media");
+            if (dir == null) {
+                dir = getFilesDir();
+            }
+            String ext = source.contains(".mp3") ? ".mp3" : ".m4a";
+            java.io.File dest = new java.io.File(dir, id + ext);
+            try {
+                download(source, dest, "Saving");
+                Shelf.setLocalPath(db, id, dest.getAbsolutePath());
+                runOnUiThread(() -> {
+                    status.setText("Kept");
+                    show(Shelf.video(db, id));
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static boolean looksLikeFeed(String url) {
+        String lower = url.toLowerCase(Locale.ROOT);
+        return lower.contains("rss") || lower.contains("feed") || lower.contains("podcast")
+                || lower.endsWith(".xml");
+    }
+
+    /** Shows a podcast feed. Returns false when the URL is not one. */
+    private boolean openFeed(String url) {
+        try {
+            String body = fetchText(url);
+            if (!body.contains("<rss") && !body.contains("<feed")) {
+                return false;
+            }
+            Cast.Show show = Cast.parse(body);
+            List<Browse.Found> rows = new ArrayList<>();
+            for (Cast.Episode episode : show.episodes) {
+                rows.add(new Browse.Found("episode", episode.title, episode.audio, show.title));
+            }
+            String label = show.title.isEmpty() ? "Podcast" : show.title;
+            runOnUiThread(() -> {
+                episodes = show.episodes;
+                exploreSession = null;
+                showExplore(rows, label);
+            });
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void openEpisode(String audio) {
+        Cast.Episode episode = null;
+        for (Cast.Episode candidate : episodes) {
+            if (audio.equals(candidate.audio)) {
+                episode = candidate;
+                break;
+            }
+        }
+        if (episode == null) {
+            status.setText("That episode is gone");
+            return;
+        }
+        Cast.Episode chosen = episode;
+        showVideo();
+        status.setText("Opening");
+        io.execute(() -> {
+            try {
+                List<Shelf.TrackIn> incoming = new ArrayList<>();
+                for (Cast.Caption caption : chosen.captions) {
+                    try {
+                        String raw = fetchText(caption.url);
+                        String suffix = caption.type.contains("srt") ? "srt" : "vtt";
+                        Cues.Transcript transcript = Cues.parse(raw, suffix, false);
+                        if (transcript.spans.isEmpty()) {
+                            continue;
+                        }
+                        String lang = caption.lang.isEmpty() ? "und" : caption.lang;
+                        incoming.add(new Shelf.TrackIn(lang, "manual", lang + " · podcast", transcript));
+                    } catch (Exception ignored) {
+                        // One missing caption file does not drop the episode.
+                    }
+                }
+                String show = "";
+                for (Browse.Found row : exploreRows) {
+                    if (audio.equals(row.url)) {
+                        show = row.meta;
+                        break;
+                    }
+                }
+                long id = Shelf.save(
+                        db, "Podcast", show, show, "", chosen.audio, chosen.title,
+                        chosen.page, chosen.audio, incoming);
+                Shelf.Video video = Shelf.video(db, id);
+                boolean bare = incoming.isEmpty();
+                runOnUiThread(() -> {
+                    show(video);
+                    if (bare) {
+                        status.setText("No transcript. Keep, then Recognize.");
+                    }
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static String fetchText(String url) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", OkDownloader.USER_AGENT)
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            String body = response.body().string();
+            if (body.length() > 3_000_000) {
+                return body.substring(0, 3_000_000);
+            }
+            return body;
+        }
+    }
+
     /** Saves a stream. Does not record the path on the shelf. */
     private void download(String source, java.io.File dest, String label) throws java.io.IOException {
         okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
@@ -679,6 +815,9 @@ public final class MainActivity extends AppCompatActivity {
                 } catch (Exception ignored) {
                     link = null;
                 }
+                if (link == null && looksLikeFeed(typed) && openFeed(typed)) {
+                    return;
+                }
                 if (link == StreamingService.LinkType.STREAM
                         || (link == null && typed.contains("://"))) {
                     runOnUiThread(() -> openVideo(typed));
@@ -715,6 +854,9 @@ public final class MainActivity extends AppCompatActivity {
 
     private void showExplore(List<Browse.Found> rows, String label) {
         exploreRows = rows;
+        if (rows.isEmpty() || !"episode".equals(rows.get(0).kind)) {
+            episodes = Collections.emptyList();
+        }
         String more = exploreSession != null && exploreSession.next != null ? " · more" : "";
         exploreStatus.setText(label + " · " + rows.size() + more);
         exploreList.setAdapter(new ExploreAdapter());
@@ -835,6 +977,10 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         Browse.Found item = exploreRows.get(position);
+        if ("episode".equals(item.kind)) {
+            openEpisode(item.url);
+            return;
+        }
         if ("video".equals(item.kind)) {
             openVideo(item.url);
             return;
@@ -1362,6 +1508,12 @@ public final class MainActivity extends AppCompatActivity {
         status.setText("Saving");
         String page = pageUrl;
         long id = videoId;
+        try {
+            NewPipe.getServiceByUrl(page);
+        } catch (Exception notAService) {
+            keepDirect(playUrl, id);
+            return;
+        }
         io.execute(() -> {
             try {
                 StreamInfo info = StreamInfo.getInfo(page);
