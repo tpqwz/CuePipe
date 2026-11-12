@@ -25,6 +25,8 @@
     <string name="paragraphs">Paragraphs</string>
     <string name="subtitles">Subtitles</string>
     <string name="player">Player</string>
+    <string name="mini">Mini</string>
+    <string name="full">Full</string>
     <string name="excerpts">Excerpts</string>
     <string name="details">Details</string>
     <string name="explore_hint">Search or paste a URL</string>

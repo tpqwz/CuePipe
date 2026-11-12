@@ -121,6 +121,7 @@
             android:visibility="gone">
 
                 <FrameLayout
+                    android:id="@+id/player_frame"
                     android:layout_width="match_parent"
                     android:layout_height="200dp">
 
@@ -129,11 +130,23 @@
                         android:layout_width="match_parent"
                         android:layout_height="match_parent" />
 
+                    <ProgressBar
+                        android:id="@+id/play_line"
+                        style="?android:attr/progressBarStyleHorizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="3dp"
+                        android:layout_gravity="bottom"
+                        android:max="1000"
+                        android:progressBackgroundTint="#66FFFFFF"
+                        android:progressTint="@color/accent"
+                        android:visibility="gone" />
+
                     <TextView
                         android:id="@+id/burn"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_gravity="bottom"
+                        android:layout_marginBottom="3dp"
                         android:background="#CC000000"
                         android:clickable="false"
                         android:focusable="false"
@@ -279,6 +292,13 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/player" />
+
+                    <Button
+                        android:id="@+id/mini"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/mini" />
                 </LinearLayout>
 
                 <LinearLayout

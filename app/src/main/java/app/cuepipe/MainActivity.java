@@ -1,5 +1,6 @@
 package app.cuepipe;
 
+import android.content.Intent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
@@ -24,6 +25,8 @@ import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.exoplayer.source.MediaSource;
+import androidx.media3.exoplayer.source.MergingMediaSource;
 import androidx.media3.ui.PlayerView;
 
 import com.google.android.gms.tasks.Tasks;
@@ -103,14 +106,18 @@ public final class MainActivity extends AppCompatActivity {
     private boolean prose;
     private boolean excerptMode;
     private float speed = 1f;
+    /** -1 keeps the usual stream. 0 is audio only. 360 and 720 pick a picture. */
+    private int qualityHeight = -1;
     /** Positive delay shows each cue later. Stored times do not change. */
     private int offsetMs;
+    private boolean mini;
     private List<Prose.Block> blocks = Collections.emptyList();
     private final Runnable playTick = new Runnable() {
         @Override
         public void run() {
             paintOnScreen();
             followTranscript();
+            paintLine();
             if (videoOpen && player.isPlaying()) {
                 lines.postDelayed(this, 250);
             }
@@ -156,15 +163,23 @@ public final class MainActivity extends AppCompatActivity {
         EditText query = findViewById(R.id.query);
         Button find = findViewById(R.id.find);
         PlayerView playerView = findViewById(R.id.player);
-
-        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                .setUserAgent(OkDownloader.USER_AGENT);
-        player = new ExoPlayer.Builder(this)
-                .setMediaSourceFactory(new DefaultMediaSourceFactory(this).setDataSourceFactory(http))
-                .build();
+        startService(new Intent(this, PlayService.class));
+        player = PlayService.player(this);
         playerView.setPlayer(player);
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {android.Manifest.permission.POST_NOTIFICATIONS}, 4);
+        }
         playerView.setFocusable(false);
         playerView.setFocusableInTouchMode(false);
+        playerView.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener) visibility -> {
+            android.widget.ProgressBar line = findViewById(R.id.play_line);
+            line.setVisibility(visibility == View.VISIBLE ? View.GONE : View.VISIBLE);
+            paintLine();
+        });
+        findViewById(R.id.play_line).setVisibility(
+                playerView.isControllerFullyVisible() ? View.GONE : View.VISIBLE);
         burn = findViewById(R.id.burn);
         onScreen = findViewById(R.id.on_screen);
         onScreen.setOnCheckedChangeListener((button, checked) -> {
@@ -190,6 +205,7 @@ public final class MainActivity extends AppCompatActivity {
                 followed = -1;
                 followTranscript();
                 paintOnScreen();
+                paintLine();
             }
 
             @Override
@@ -268,6 +284,7 @@ public final class MainActivity extends AppCompatActivity {
         });
         findViewById(R.id.subtitles).setOnClickListener(v -> pickSubtitles());
         findViewById(R.id.player_menu).setOnClickListener(v -> playerMenu());
+        findViewById(R.id.mini).setOnClickListener(v -> setMini(!mini));
         findViewById(R.id.channel).setOnClickListener(v -> openChannel());
         findViewById(R.id.follow).setOnClickListener(v -> toggleFollow());
         findViewById(R.id.drawer_home).setOnClickListener(v -> {
@@ -396,7 +413,7 @@ public final class MainActivity extends AppCompatActivity {
         filterService.setOnItemSelectedListener(refresh);
 
         Shelf.Video latest = Shelf.latest(db);
-        if (latest != null) {
+        if (latest != null && player.getMediaItemCount() == 0) {
             show(latest, false);
         } else {
             fillServices();
@@ -932,17 +949,45 @@ public final class MainActivity extends AppCompatActivity {
         return (int) player.getCurrentPosition() - offsetMs;
     }
 
+    /** Shrinks the picture so the transcript keeps the page. */
+    private void setMini(boolean on) {
+        mini = on;
+        android.widget.FrameLayout frame = findViewById(R.id.player_frame);
+        android.widget.LinearLayout.LayoutParams lp =
+                (android.widget.LinearLayout.LayoutParams) frame.getLayoutParams();
+        if (on) {
+            lp.width = dp(168);
+            lp.height = dp(94);
+            lp.gravity = android.view.Gravity.END;
+            frame.setElevation(dp(6));
+        } else {
+            lp.width = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+            lp.height = dp(200);
+            lp.gravity = android.view.Gravity.NO_GRAVITY;
+            frame.setElevation(0);
+        }
+        frame.setLayoutParams(lp);
+        ((Button) findViewById(R.id.mini)).setText(on ? R.string.full : R.string.mini);
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
     private void playerMenu() {
         new androidx.appcompat.app.AlertDialog.Builder(this)
                 .setTitle(R.string.player)
                 .setItems(new String[] {
                         "Speed " + speedLabel(speed),
-                        "Subtitle offset " + offsetLabel(offsetMs)
+                        "Subtitle offset " + offsetLabel(offsetMs),
+                        "Quality " + qualityLabel(qualityHeight)
                 }, (dialog, which) -> {
                     if (which == 0) {
                         pickSpeed();
-                    } else {
+                    } else if (which == 1) {
                         pickOffset();
+                    } else {
+                        pickQuality();
                     }
                 })
                 .show();
@@ -962,6 +1007,129 @@ public final class MainActivity extends AppCompatActivity {
                     status.setText("Speed " + speedLabel(speed));
                 })
                 .show();
+    }
+
+    private void pickQuality() {
+        int[] heights = {-1, 360, 720, 0};
+        String[] labels = new String[heights.length];
+        for (int i = 0; i < heights.length; i++) {
+            labels[i] = qualityLabel(heights[i]);
+        }
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Quality")
+                .setItems(labels, (dialog, which) -> applyQuality(heights[which]))
+                .show();
+    }
+
+    /** Switches the stream and stays at the current moment. */
+    private void applyQuality(int height) {
+        if (pageUrl == null || pageUrl.isEmpty()) {
+            status.setText("No source is stored for this video");
+            return;
+        }
+        qualityHeight = height;
+        int at = (int) Math.max(player.getCurrentPosition(), 0);
+        String page = pageUrl;
+        status.setText("Quality " + qualityLabel(height));
+        io.execute(() -> {
+            try {
+                StreamInfo info = StreamInfo.getInfo(page);
+                runOnUiThread(() -> playChosen(info, at));
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private void playChosen(StreamInfo info, int position) {
+        if (qualityHeight == 0) {
+            String audio = audioUrl(info);
+            if (audio.isEmpty()) {
+                status.setText("No audio stream");
+                return;
+            }
+            play(audio, position);
+            return;
+        }
+        int target = qualityHeight < 0 ? 720 : qualityHeight;
+        VideoStream progressive = nearest(info.getVideoStreams(), target);
+        if (progressive != null) {
+            play(progressive.getContent(), position);
+            return;
+        }
+        VideoStream picture = nearest(info.getVideoOnlyStreams(), target);
+        String audio = audioUrl(info);
+        if (picture != null && !audio.isEmpty()) {
+            playPair(picture.getContent(), audio, position);
+            return;
+        }
+        if (picture != null) {
+            play(picture.getContent(), position);
+            return;
+        }
+        String fallback = playUrl(info);
+        if (fallback.isEmpty()) {
+            status.setText("This video has one quality");
+            return;
+        }
+        play(fallback, position);
+    }
+
+    private void playPair(String videoUrl, String audioUrl, int position) {
+        playUrl = videoUrl;
+        androidx.media3.datasource.DefaultHttpDataSource.Factory http =
+                new androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                        .setUserAgent(OkDownloader.USER_AGENT);
+        DefaultMediaSourceFactory factory = new DefaultMediaSourceFactory(this).setDataSourceFactory(http);
+        MediaSource picture = factory.createMediaSource(new MediaItem.Builder()
+                .setUri(videoUrl)
+                .setMediaMetadata(new androidx.media3.common.MediaMetadata.Builder()
+                        .setTitle(title.getText().toString())
+                        .build())
+                .build());
+        MediaSource sound = factory.createMediaSource(MediaItem.fromUri(audioUrl));
+        player.setMediaSource(new MergingMediaSource(picture, sound));
+        player.prepare();
+        player.seekTo(position);
+        player.setPlaybackSpeed(speed);
+        player.play();
+    }
+
+    private static VideoStream nearest(List<VideoStream> streams, int targetHeight) {
+        if (streams == null) {
+            return null;
+        }
+        VideoStream best = null;
+        int bestGap = Integer.MAX_VALUE;
+        for (VideoStream stream : streams) {
+            if (!stream.isUrl() || stream.getContent() == null || stream.getContent().isEmpty()) {
+                continue;
+            }
+            if (stream.getContent().contains(".m3u8")) {
+                continue;
+            }
+            int height = stream.getHeight();
+            if (height <= 0) {
+                continue;
+            }
+            int gap = Math.abs(height - targetHeight);
+            if (gap < bestGap) {
+                best = stream;
+                bestGap = gap;
+            }
+        }
+        return best;
+    }
+
+    private static String qualityLabel(int height) {
+        if (height == 0) {
+            return "Audio";
+        }
+        if (height < 0) {
+            return "Auto";
+        }
+        return height + "p";
     }
 
     private void pickOffset() {
@@ -1175,7 +1343,12 @@ public final class MainActivity extends AppCompatActivity {
         android.net.Uri uri = url.startsWith("/")
                 ? android.net.Uri.fromFile(new java.io.File(url))
                 : android.net.Uri.parse(url);
-        player.setMediaItem(MediaItem.fromUri(uri));
+        player.setMediaItem(new MediaItem.Builder()
+                .setUri(uri)
+                .setMediaMetadata(new androidx.media3.common.MediaMetadata.Builder()
+                        .setTitle(title.getText().toString())
+                        .build())
+                .build());
         player.prepare();
         player.seekTo(t0);
         player.play();
@@ -1613,7 +1786,13 @@ public final class MainActivity extends AppCompatActivity {
         render();
         player.setPlaybackSpeed(speed);
         if (prepare && video.playUrl != null && !video.playUrl.isEmpty()) {
-            player.setMediaItem(MediaItem.fromUri(video.playUrl));
+            player.setMediaItem(new MediaItem.Builder()
+                    .setUri(video.playUrl)
+                    .setMediaMetadata(new androidx.media3.common.MediaMetadata.Builder()
+                            .setTitle(video.title)
+                            .setArtist(video.channel)
+                            .build())
+                    .build());
             player.prepare();
         } else if (!prepare) {
             player.clearMediaItems();
@@ -1703,6 +1882,20 @@ public final class MainActivity extends AppCompatActivity {
         followed = -1;
         followTranscript();
         paintOnScreen();
+    }
+
+    /** A thin position line that stays after the player controls fade. */
+    private void paintLine() {
+        android.widget.ProgressBar line = findViewById(R.id.play_line);
+        if (line == null || player == null) {
+            return;
+        }
+        long duration = player.getDuration();
+        if (duration <= 0 || duration == androidx.media3.common.C.TIME_UNSET) {
+            line.setProgress(0);
+            return;
+        }
+        line.setProgress((int) (player.getCurrentPosition() * 1000 / duration));
     }
 
     private void paintOnScreen() {
@@ -2188,7 +2381,10 @@ public final class MainActivity extends AppCompatActivity {
         if (lines != null) {
             lines.removeCallbacks(playTick);
         }
-        player.release();
+        PlayerView view = findViewById(R.id.player);
+        if (view != null) {
+            view.setPlayer(null);
+        }
         shelf.close();
         io.shutdown();
         super.onDestroy();
