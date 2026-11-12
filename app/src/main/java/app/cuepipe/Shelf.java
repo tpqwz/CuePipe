@@ -80,6 +80,17 @@ public final class Shelf {
         }
     }
 
+    public static final String EXCERPT_SQL =
+            "CREATE TABLE IF NOT EXISTS excerpt ("
+                    + "id INTEGER PRIMARY KEY,"
+                    + "video_id INTEGER NOT NULL,"
+                    + "track_id INTEGER NOT NULL,"
+                    + "t0_ms INTEGER NOT NULL,"
+                    + "byte_offset INTEGER NOT NULL,"
+                    + "text TEXT NOT NULL,"
+                    + "title TEXT NOT NULL,"
+                    + "channel TEXT NOT NULL)";
+
     public static final String BOOKMARK_SQL =
             "CREATE TABLE IF NOT EXISTS bookmark ("
                     + "id INTEGER PRIMARY KEY,"
@@ -132,6 +143,7 @@ public final class Shelf {
                     + "v BLOB NOT NULL,"
                     + "PRIMARY KEY (track_id, idx))",
             BOOKMARK_SQL,
+            EXCERPT_SQL,
     };
 
     private final Db helper;
@@ -411,14 +423,14 @@ public final class Shelf {
         return out;
     }
 
-    /** First hit in each matching track, across the whole shelf. */
+    /** Every matching line in each track. The quote is that line. */
     public static List<Hit> searchAll(Sql db, SqlRows rows, String match) {
         List<Hit> hits = new ArrayList<>();
         for (String[] found : rows.rows(
                 "SELECT docid, offsets(fts) FROM fts WHERE fts MATCH ?", match)) {
             long trackId = Long.parseLong(found[0]);
-            int offset = Cues.firstOffset(found[1]);
-            if (offset < 0) {
+            List<Integer> places = Cues.matchOffsets(found[1]);
+            if (places.isEmpty()) {
                 continue;
             }
             String videoId = db.text(
@@ -430,9 +442,20 @@ public final class Shelf {
             }
             Video video = video(db, Long.parseLong(videoId));
             List<Cues.Span> spans = readSpans(rows, trackId);
-            int at = Cues.spanIndex(spans, offset);
-            String quote = at < 0 ? "" : spans.get(at).text;
-            hits.add(new Hit(video.id, trackId, offset, video.title, video.channel, quote));
+            boolean[] seen = new boolean[spans.size()];
+            for (int offset : places) {
+                int at = Cues.spanIndex(spans, offset);
+                if (at >= 0) {
+                    if (seen[at]) {
+                        continue;
+                    }
+                    seen[at] = true;
+                    hits.add(new Hit(video.id, trackId, offset, video.title, video.channel,
+                            spans.get(at).text));
+                } else {
+                    hits.add(new Hit(video.id, trackId, offset, video.title, video.channel, ""));
+                }
+            }
         }
         return hits;
     }
@@ -467,6 +490,38 @@ public final class Shelf {
 
     public static boolean followed(Sql db, String url) {
         return "1".equals(db.text("SELECT follow FROM bookmark WHERE url=?", url));
+    }
+
+    public static void saveExcerpt(Sql db, long videoId, long trackId, int t0, int byteOffset,
+                                   String text, String title, String channel) {
+        String have = db.text(
+                "SELECT id FROM excerpt WHERE video_id=? AND t0_ms=? AND text=?",
+                videoId, t0, text);
+        if (have != null) {
+            return;
+        }
+        db.exec("INSERT INTO excerpt(video_id, track_id, t0_ms, byte_offset, text, title, channel) "
+                        + "VALUES(?,?,?,?,?,?,?)",
+                videoId, trackId, t0, byteOffset,
+                text == null ? "" : text,
+                title == null ? "" : title,
+                channel == null ? "" : channel);
+    }
+
+    public static List<Hit> excerpts(SqlRows rows) {
+        List<Hit> hits = new ArrayList<>();
+        for (String[] row : rows.rows(
+                "SELECT video_id, track_id, byte_offset, title, channel, text "
+                        + "FROM excerpt ORDER BY id DESC")) {
+            hits.add(new Hit(
+                    Long.parseLong(row[0]),
+                    Long.parseLong(row[1]),
+                    Integer.parseInt(row[2]),
+                    row[3],
+                    row[4],
+                    row[5]));
+        }
+        return hits;
     }
 
     public static List<String[]> follows(SqlRows rows) {
@@ -531,7 +586,7 @@ public final class Shelf {
 
     private static final class Db extends SQLiteOpenHelper {
         Db(Context context) {
-            super(context, "cuepipe.db", null, 7);
+            super(context, "cuepipe.db", null, 8);
         }
 
         @Override
@@ -561,6 +616,9 @@ public final class Shelf {
             }
             if (oldVersion < 5) {
                 db.execSQL("ALTER TABLE video ADD COLUMN thumb TEXT NOT NULL DEFAULT ''");
+            }
+            if (oldVersion < 8) {
+                db.execSQL(EXCERPT_SQL);
             }
             if (oldVersion < 6) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS vec ("

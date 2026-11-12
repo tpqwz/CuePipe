@@ -265,6 +265,20 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/paragraphs" />
+
+                    <Button
+                        android:id="@+id/subtitles"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/subtitles" />
+
+                    <Button
+                        android:id="@+id/player_menu"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/player" />
                 </LinearLayout>
 
                 <LinearLayout
@@ -500,6 +514,14 @@
             android:layout_height="wrap_content"
             android:gravity="start|center_vertical"
             android:text="@string/bookmarks" />
+
+        <Button
+            android:id="@+id/drawer_excerpts"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="start|center_vertical"
+            android:text="@string/excerpts" />
 
         <Button
             android:id="@+id/drawer_follows"

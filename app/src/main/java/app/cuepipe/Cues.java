@@ -186,18 +186,44 @@ public final class Cues {
 
     /** First byte start from an FTS4 offsets() string, or -1. */
     public static int firstOffset(String offsets) {
+        List<Integer> all = matchOffsets(offsets);
+        return all.isEmpty() ? -1 : all.get(0);
+    }
+
+    /**
+     * Every match place in an FTS4 offsets() string, in file order.
+     * A later term that starts inside an earlier match is the same place.
+     */
+    public static List<Integer> matchOffsets(String offsets) {
+        List<int[]> marks = new ArrayList<>();
         if (offsets == null) {
-            return -1;
+            return new ArrayList<>();
         }
-        String[] p = offsets.trim().split("\\s+");
-        if (p.length < 4 || p[0].isEmpty()) {
-            return -1;
+        String trimmed = offsets.trim();
+        if (trimmed.isEmpty()) {
+            return new ArrayList<>();
         }
-        try {
-            return Integer.parseInt(p[2]);
-        } catch (NumberFormatException e) {
-            return -1;
+        String[] parts = trimmed.split("\\s+");
+        for (int i = 0; i + 3 < parts.length; i += 4) {
+            try {
+                int start = Integer.parseInt(parts[i + 2]);
+                int len = Integer.parseInt(parts[i + 3]);
+                marks.add(new int[] {start, Math.max(len, 1)});
+            } catch (NumberFormatException e) {
+                break;
+            }
         }
+        marks.sort((a, b) -> Integer.compare(a[0], b[0]));
+        List<Integer> out = new ArrayList<>();
+        int lastEnd = -1;
+        for (int[] mark : marks) {
+            if (mark[0] < lastEnd) {
+                continue;
+            }
+            out.add(mark[0]);
+            lastEnd = mark[0] + mark[1];
+        }
+        return out;
     }
 
     private static String sniff(String raw) {

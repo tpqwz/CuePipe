@@ -124,6 +124,8 @@ public final class CuesTest {
         assertEquals(0, Cues.spanIndex(t.spans, 0));
         assertEquals(-1, Cues.spanIndex(t.spans, -1));
         assertEquals(nl + 1, Cues.firstOffset("0 0 " + (nl + 1) + " 4"));
+        assertEquals(2, Cues.matchOffsets("0 0 0 5 0 1 20 4 0 0 2 3").size());
+        assertEquals(20, (int) Cues.matchOffsets("0 0 0 5 0 1 20 4").get(1));
     }
 
     @Test

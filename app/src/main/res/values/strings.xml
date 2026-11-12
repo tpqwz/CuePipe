@@ -23,6 +23,9 @@
     <string name="transcript">Transcript</string>
     <string name="related">Related</string>
     <string name="paragraphs">Paragraphs</string>
+    <string name="subtitles">Subtitles</string>
+    <string name="player">Player</string>
+    <string name="excerpts">Excerpts</string>
     <string name="details">Details</string>
     <string name="explore_hint">Search or paste a URL</string>
     <string name="bookmarks">Bookmarks</string>

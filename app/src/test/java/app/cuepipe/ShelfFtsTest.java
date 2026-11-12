@@ -72,6 +72,17 @@ public final class ShelfFtsTest {
         List<Shelf.Hit> hits = Shelf.searchAll(db, db, "zebra");
         assertEquals(1, hits.size());
         assertEquals("zebra stripe", hits.get(0).quote);
+        Cues.Transcript twice = Cues.parse(
+                "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhello elephants\n\n"
+                        + "00:00:05.000 --> 00:00:06.000\nhello again\n",
+                "vtt", false);
+        Shelf.save(db, "YouTube", "UCtwice", "Twice", "https://example.test/twice", "twice",
+                "Hello twice", "https://example.test/twice-watch", "https://example.test/t.m3u8",
+                List.of(new Shelf.TrackIn("en", "manual", "en · manual", twice)));
+        List<Shelf.Hit> both = Shelf.searchAll(db, db, "hello");
+        assertEquals(2, both.size());
+        assertEquals("hello elephants", both.get(0).quote);
+        assertEquals("hello again", both.get(1).quote);
         assertEquals("Zebra hour", hits.get(0).title);
         Shelf.bookmark(db, "playlist", "YouTube", "https://example.test/list", "Mix");
         assertTrue(Shelf.bookmarked(db, "https://example.test/list"));
@@ -145,6 +156,12 @@ public final class ShelfFtsTest {
         assertEquals(true, Shelf.followed(db, "https://example.test/c"));
         assertEquals(1, Shelf.follows(db).size());
         assertEquals(1, Shelf.checkRows(db).size());
+        Shelf.saveExcerpt(db, 1, 2, 1500, 10, "hello there", "A talk", "Example");
+        Shelf.saveExcerpt(db, 1, 2, 1500, 10, "hello there", "A talk", "Example");
+        List<Shelf.Hit> saved = Shelf.excerpts(db);
+        assertEquals(1, saved.size());
+        assertEquals("hello there", saved.get(0).quote);
+        assertEquals(10, saved.get(0).byteOffset);
         Shelf.follow(db, "YouTube", "https://example.test/c", "Example", false);
         assertEquals(false, Shelf.followed(db, "https://example.test/c"));
         assertEquals(0, Shelf.checkRows(db).size());

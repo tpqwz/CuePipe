@@ -101,6 +101,10 @@ public final class MainActivity extends AppCompatActivity {
     private int followed = -1;
     private boolean triedFresh;
     private boolean prose;
+    private boolean excerptMode;
+    private float speed = 1f;
+    /** Positive delay shows each cue later. Stored times do not change. */
+    private int offsetMs;
     private List<Prose.Block> blocks = Collections.emptyList();
     private final Runnable playTick = new Runnable() {
         @Override
@@ -227,23 +231,11 @@ public final class MainActivity extends AppCompatActivity {
             } else if (prose && position >= 0 && position < blocks.size()) {
                 followLines = true;
                 followed = -1;
-                int t0 = blocks.get(position).t0;
-                if (player.getMediaItemCount() > 0
-                        && player.getPlaybackState() != Player.STATE_IDLE) {
-                    seek(t0);
-                } else {
-                    jump(t0);
-                }
+                playHere(blocks.get(position).t0);
             } else if (position >= 0 && position < spans.size()) {
                 followLines = true;
                 followed = -1;
-                int t0 = spans.get(position).t0;
-                if (player.getMediaItemCount() > 0
-                        && player.getPlaybackState() != Player.STATE_IDLE) {
-                    seek(t0);
-                } else {
-                    jump(t0);
-                }
+                playHere(spans.get(position).t0);
             }
         });
         lines.setOnScrollListener(new android.widget.AbsListView.OnScrollListener() {
@@ -269,15 +261,13 @@ public final class MainActivity extends AppCompatActivity {
             }
         });
         lines.setOnItemLongClickListener((parent, view, position, id) -> {
-            if (prose && !relatedMode) {
-                status.setText("Switch off Paragraphs to edit one cue");
-                return true;
-            }
             if (!relatedMode) {
-                editLine(position);
+                lineMenu(position);
             }
             return true;
         });
+        findViewById(R.id.subtitles).setOnClickListener(v -> pickSubtitles());
+        findViewById(R.id.player_menu).setOnClickListener(v -> playerMenu());
         findViewById(R.id.channel).setOnClickListener(v -> openChannel());
         findViewById(R.id.follow).setOnClickListener(v -> toggleFollow());
         findViewById(R.id.drawer_home).setOnClickListener(v -> {
@@ -288,7 +278,13 @@ public final class MainActivity extends AppCompatActivity {
         });
         findViewById(R.id.drawer_library).setOnClickListener(v -> {
             closeDrawer();
+            excerptMode = false;
             showTab(1);
+            reloadLibrary();
+        });
+        findViewById(R.id.drawer_excerpts).setOnClickListener(v -> {
+            closeDrawer();
+            showExcerpts();
         });
         findViewById(R.id.drawer_downloads).setOnClickListener(v -> {
             closeDrawer();
@@ -867,6 +863,246 @@ public final class MainActivity extends AppCompatActivity {
         exploreStatus.setText("Bookmarked");
     }
 
+    private void lineMenu(int position) {
+        int t0;
+        String text;
+        int byteOffset;
+        long trackId;
+        boolean canEdit = false;
+        if (prose) {
+            if (position < 0 || position >= blocks.size() || tracks.isEmpty()) {
+                return;
+            }
+            Prose.Block block = blocks.get(position);
+            if (block.spanIndex < 0 || block.spanIndex >= spans.size()) {
+                return;
+            }
+            t0 = block.t0;
+            text = block.text;
+            byteOffset = spans.get(block.spanIndex).byteStart;
+            int primary = chosen(0);
+            trackId = tracks.get(primary < 0 ? 0 : primary).id;
+        } else {
+            if (position < 0 || position >= spans.size() || chosen(0) < 0) {
+                return;
+            }
+            Cues.Span span = spans.get(position);
+            t0 = span.t0;
+            text = span.text;
+            byteOffset = span.byteStart;
+            trackId = tracks.get(chosen(0)).id;
+            canEdit = true;
+        }
+        String[] actions = canEdit
+                ? new String[] {"Play here", "Save excerpt", "Share", "Edit line"}
+                : new String[] {"Play here", "Save excerpt", "Share"};
+        int playAt = t0;
+        String quote = text;
+        int bytes = byteOffset;
+        long savedTrack = trackId;
+        int line = position;
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(stamp(t0))
+                .setItems(actions, (dialog, which) -> {
+                    if (which == 0) {
+                        playHere(playAt);
+                    } else if (which == 1) {
+                        saveExcerpt(savedTrack, playAt, bytes, quote);
+                    } else if (which == 2) {
+                        shareExcerpt(quote, playAt);
+                    } else {
+                        editLine(line);
+                    }
+                })
+                .show();
+    }
+
+    private void playHere(int t0) {
+        int at = Math.max(0, t0 + offsetMs);
+        if (player.getMediaItemCount() > 0
+                && player.getPlaybackState() != Player.STATE_IDLE) {
+            seek(at);
+        } else {
+            jump(at);
+        }
+    }
+
+    /** Video time minus the subtitle delay, so a late file can be shown early. */
+    private int cueClock() {
+        return (int) player.getCurrentPosition() - offsetMs;
+    }
+
+    private void playerMenu() {
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(R.string.player)
+                .setItems(new String[] {
+                        "Speed " + speedLabel(speed),
+                        "Subtitle offset " + offsetLabel(offsetMs)
+                }, (dialog, which) -> {
+                    if (which == 0) {
+                        pickSpeed();
+                    } else {
+                        pickOffset();
+                    }
+                })
+                .show();
+    }
+
+    private void pickSpeed() {
+        float[] rates = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f};
+        String[] labels = new String[rates.length];
+        for (int i = 0; i < rates.length; i++) {
+            labels[i] = speedLabel(rates[i]);
+        }
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Speed")
+                .setItems(labels, (dialog, which) -> {
+                    speed = rates[which];
+                    player.setPlaybackSpeed(speed);
+                    status.setText("Speed " + speedLabel(speed));
+                })
+                .show();
+    }
+
+    private void pickOffset() {
+        int[] shifts = {-2000, -1000, -500, 0, 500, 1000, 2000};
+        String[] labels = new String[shifts.length];
+        for (int i = 0; i < shifts.length; i++) {
+            labels[i] = offsetLabel(shifts[i]);
+        }
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Subtitle offset")
+                .setItems(labels, (dialog, which) -> {
+                    offsetMs = shifts[which];
+                    followed = -1;
+                    followTranscript();
+                    paintOnScreen();
+                    status.setText("Subtitle offset " + offsetLabel(offsetMs));
+                })
+                .show();
+    }
+
+    private static String speedLabel(float rate) {
+        if (rate == 1f) {
+            return "1×";
+        }
+        if (rate == 0.5f) {
+            return "0.5×";
+        }
+        if (rate == 0.75f) {
+            return "0.75×";
+        }
+        if (rate == 1.25f) {
+            return "1.25×";
+        }
+        if (rate == 1.5f) {
+            return "1.5×";
+        }
+        return "2×";
+    }
+
+    private static String offsetLabel(int ms) {
+        if (ms == 0) {
+            return "on time";
+        }
+        String seconds = ms % 1000 == 0
+                ? Integer.toString(Math.abs(ms) / 1000)
+                : String.format(Locale.US, "%.1f", Math.abs(ms) / 1000f);
+        return ms < 0 ? seconds + " s earlier" : seconds + " s later";
+    }
+
+    private void saveExcerpt(long trackId, int t0, int byteOffset, String text) {
+        Shelf.Video video = Shelf.video(db, videoId);
+        if (video == null || text == null || text.isEmpty()) {
+            status.setText("Nothing to save");
+            return;
+        }
+        Shelf.saveExcerpt(db, video.id, trackId, t0, byteOffset, text, video.title, video.channel);
+        status.setText("Saved excerpt");
+    }
+
+    private void shareExcerpt(String text, int t0) {
+        android.content.Intent send = new android.content.Intent(android.content.Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(android.content.Intent.EXTRA_TEXT,
+                text + "\n— " + title.getText() + " " + stamp(t0));
+        startActivity(android.content.Intent.createChooser(send, getString(R.string.excerpts)));
+    }
+
+    private void showExcerpts() {
+        excerptMode = true;
+        showTab(1);
+        reloadLibrary();
+    }
+
+    private void pickSubtitles() {
+        if (tracks.isEmpty()) {
+            status.setText("No captions");
+            return;
+        }
+        String[] labels = new String[tracks.size()];
+        boolean[] checked = new boolean[tracks.size()];
+        for (int i = 0; i < tracks.size(); i++) {
+            labels[i] = tracks.get(i).label;
+            checked[i] = trackShown(i);
+        }
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(R.string.subtitles)
+                .setMultiChoiceItems(labels, checked, (dialog, which, on) -> {
+                    int count = 0;
+                    for (boolean pick : checked) {
+                        if (pick) {
+                            count++;
+                        }
+                    }
+                    if (count > SLOTS) {
+                        checked[which] = false;
+                        ((androidx.appcompat.app.AlertDialog) dialog).getListView()
+                                .setItemChecked(which, false);
+                        status.setText("Four languages at a time");
+                    }
+                })
+                .setPositiveButton("Show", (dialog, which) -> applySubtitleChecks(checked))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private boolean trackShown(int trackIndex) {
+        for (int slot = 0; slot < SLOTS; slot++) {
+            if (chosen(slot) == trackIndex) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void applySubtitleChecks(boolean[] checked) {
+        int[] pick = {-1, -1, -1, -1};
+        int n = 0;
+        int current = chosen(0);
+        if (current >= 0 && current < checked.length && checked[current]) {
+            pick[n++] = current;
+        }
+        for (int i = 0; i < checked.length && n < SLOTS; i++) {
+            if (checked[i] && i != pick[0]) {
+                pick[n++] = i;
+            }
+        }
+        if (pick[0] < 0) {
+            pick[0] = tracks.isEmpty() ? 0 : defaultPrimary(tracks);
+        }
+        filling = true;
+        for (int i = 0; i < SLOTS; i++) {
+            int sel = i == 0 ? Math.max(pick[i], 0) : pick[i] + 1;
+            if (sel < 0) {
+                sel = 0;
+            }
+            slots[i].setSelection(sel);
+        }
+        filling = false;
+        render();
+    }
+
     private void editLine(int position) {
         if (position < 0 || position >= spans.size() || chosen(0) < 0) {
             return;
@@ -1026,11 +1262,7 @@ public final class MainActivity extends AppCompatActivity {
                 followed = index;
                 lines.setItemChecked(index, true);
                 lines.setSelectionFromTop(index, 0);
-                if (player.getMediaItemCount() > 0) {
-                    seek(spans.get(index).t0);
-                } else {
-                    jump(spans.get(index).t0);
-                }
+                playHere(spans.get(index).t0);
             }
             return;
         }
@@ -1079,6 +1311,26 @@ public final class MainActivity extends AppCompatActivity {
             service = filterService.getSelectedItem().toString();
         }
         String query = libraryQuery.getText().toString().trim();
+        if (excerptMode) {
+            List<Shelf.Hit> all = Shelf.excerpts(db);
+            if (!query.isEmpty()) {
+                String needle = query.toLowerCase(Locale.ROOT);
+                List<Shelf.Hit> kept = new ArrayList<>();
+                for (Shelf.Hit hit : all) {
+                    if (hit.quote.toLowerCase(Locale.ROOT).contains(needle)
+                            || hit.title.toLowerCase(Locale.ROOT).contains(needle)
+                            || hit.channel.toLowerCase(Locale.ROOT).contains(needle)) {
+                        kept.add(hit);
+                    }
+                }
+                all = kept;
+            }
+            hits = all;
+            libraryHits = true;
+            libraryStatus.setText(hits.size() + " excerpts");
+            library.setAdapter(new LibraryAdapter());
+            return;
+        }
         if (!query.isEmpty()) {
             boolean fuzzy = ((android.widget.CheckBox) findViewById(R.id.fuzzy)).isChecked();
             boolean concepts = ((android.widget.CheckBox) findViewById(R.id.concepts)).isChecked();
@@ -1333,6 +1585,7 @@ public final class MainActivity extends AppCompatActivity {
         playUrl = video.playUrl == null ? "" : video.playUrl;
         pageUrl = video.pageUrl == null ? "" : video.pageUrl;
         triedFresh = false;
+        offsetMs = 0;
         tracks = Shelf.readTracks(db, video.id);
         String heading = video.channel + " — " + video.title;
         title.setText(heading);
@@ -1358,6 +1611,7 @@ public final class MainActivity extends AppCompatActivity {
         }
         filling = false;
         render();
+        player.setPlaybackSpeed(speed);
         if (prepare && video.playUrl != null && !video.playUrl.isEmpty()) {
             player.setMediaItem(MediaItem.fromUri(video.playUrl));
             player.prepare();
@@ -1458,7 +1712,7 @@ public final class MainActivity extends AppCompatActivity {
             }
             return;
         }
-        String text = Cues.captionAt(spans, extras, (int) player.getCurrentPosition());
+        String text = Cues.captionAt(spans, extras, cueClock());
         if (text.isEmpty()) {
             burn.setVisibility(View.GONE);
             return;
@@ -1472,7 +1726,7 @@ public final class MainActivity extends AppCompatActivity {
         if (!videoOpen || relatedMode || spans.isEmpty() || lines.getAdapter() == null) {
             return;
         }
-        int spanAt = Cues.indexAt(spans, (int) player.getCurrentPosition());
+        int spanAt = Cues.indexAt(spans, cueClock());
         int at = prose ? Prose.blockAt(blocks, spanAt) : spanAt;
         if (at < 0) {
             return;
@@ -1537,7 +1791,7 @@ public final class MainActivity extends AppCompatActivity {
             }
             lines.setItemChecked(show, true);
             lines.smoothScrollToPosition(show);
-            seek(spans.get(index).t0);
+            playHere(spans.get(index).t0);
         } catch (RuntimeException e) {
             status.setText(e.getMessage());
         }
