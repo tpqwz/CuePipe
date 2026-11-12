@@ -2524,19 +2524,44 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void playerMenu() {
+        String[] items = {
+                "Speed " + speedLabel(speed),
+                "Subtitle offset " + offsetLabel(offsetMs),
+                "Quality " + qualityLabel(qualityHeight),
+                mini ? "Full" : "Mini",
+                "Keep",
+                "Burned-in",
+                "Recognize",
+                onScreen.isChecked() ? "On screen off" : "On screen",
+                "Translate",
+                relatedMode ? "Transcript" : "Related",
+                "Details"
+        };
         new androidx.appcompat.app.AlertDialog.Builder(this)
                 .setTitle(R.string.player)
-                .setItems(new String[] {
-                        "Speed " + speedLabel(speed),
-                        "Subtitle offset " + offsetLabel(offsetMs),
-                        "Quality " + qualityLabel(qualityHeight)
-                }, (dialog, which) -> {
+                .setItems(items, (dialog, which) -> {
                     if (which == 0) {
                         pickSpeed();
                     } else if (which == 1) {
                         pickOffset();
-                    } else {
+                    } else if (which == 2) {
                         pickQuality();
+                    } else if (which == 3) {
+                        setMini(!mini);
+                    } else if (which == 4) {
+                        keep();
+                    } else if (which == 5) {
+                        burned();
+                    } else if (which == 6) {
+                        recognize();
+                    } else if (which == 7) {
+                        onScreen.setChecked(!onScreen.isChecked());
+                    } else if (which == 8) {
+                        translate();
+                    } else if (which == 9) {
+                        findViewById(relatedMode ? R.id.show_transcript : R.id.show_related).performClick();
+                    } else {
+                        findViewById(R.id.details).performClick();
                     }
                 })
                 .show();
@@ -3166,11 +3191,11 @@ public final class MainActivity extends AppCompatActivity {
             boolean concepts = ((android.widget.CheckBox) findViewById(R.id.concepts)).isChecked();
             boolean meaning = ((android.widget.CheckBox) findViewById(R.id.meaning)).isChecked();
             if (meaning) {
-                searchMeaning(query, fuzzy, concepts);
+                searchMeaning(query, fuzzy, concepts, service);
                 return;
             }
             try {
-                hits = Shelf.searchAll(db, db, Query.match(query, fuzzy, concepts));
+                hits = Shelf.searchAll(db, db, Query.match(query, fuzzy, concepts), service);
                 libraryHits = true;
                 libraryStatus.setText(hits.size() + " hits");
             } catch (RuntimeException e) {
@@ -3187,7 +3212,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     /** Word hits plus paragraph vectors. The model is fetched the first time this runs. */
-    private void searchMeaning(String query, boolean fuzzy, boolean concepts) {
+    private void searchMeaning(String query, boolean fuzzy, boolean concepts, String service) {
         hits = Collections.emptyList();
         libraryHits = true;
         library.setAdapter(new LibraryAdapter());
@@ -3196,7 +3221,7 @@ public final class MainActivity extends AppCompatActivity {
             try {
                 List<Shelf.Hit> lexical = Collections.emptyList();
                 try {
-                    lexical = Shelf.searchAll(db, db, Query.match(query, fuzzy, concepts));
+                    lexical = Shelf.searchAll(db, db, Query.match(query, fuzzy, concepts), service);
                 } catch (RuntimeException ignored) {
                     // A vector can still rank a line when the word query does not parse.
                 }
@@ -3210,6 +3235,9 @@ public final class MainActivity extends AppCompatActivity {
                     long videoId = Long.parseLong(row[1]);
                     Shelf.Video video = Shelf.video(db, videoId);
                     if (video == null) {
+                        continue;
+                    }
+                    if (service != null && !service.isEmpty() && !service.equals(video.service)) {
                         continue;
                     }
                     List<Cues.Span> rowSpans = Shelf.readSpans(db, trackId);

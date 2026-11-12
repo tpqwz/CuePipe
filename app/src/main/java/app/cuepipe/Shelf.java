@@ -425,6 +425,11 @@ public final class Shelf {
 
     /** Every matching line in each track. The quote is that line. */
     public static List<Hit> searchAll(Sql db, SqlRows rows, String match) {
+        return searchAll(db, rows, match, "");
+    }
+
+    /** Every matching line. A service name limits the hits to that source. */
+    public static List<Hit> searchAll(Sql db, SqlRows rows, String match, String service) {
         List<Hit> hits = new ArrayList<>();
         for (String[] found : rows.rows(
                 "SELECT docid, offsets(fts) FROM fts WHERE fts MATCH ?", match)) {
@@ -441,6 +446,12 @@ public final class Shelf {
                 continue;
             }
             Video video = video(db, Long.parseLong(videoId));
+            if (video == null) {
+                continue;
+            }
+            if (service != null && !service.isEmpty() && !service.equals(video.service)) {
+                continue;
+            }
             List<Cues.Span> spans = readSpans(rows, trackId);
             boolean[] seen = new boolean[spans.size()];
             for (int offset : places) {

@@ -200,57 +200,42 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal">
+                    android:orientation="horizontal"
+                    android:visibility="gone">
 
                     <Button
                         android:id="@+id/keep"
                         style="?attr/borderlessButtonStyle"
-                        android:layout_width="0dp"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/keep"
-                        android:textSize="12sp" />
+                        android:text="@string/keep" />
 
                     <Button
                         android:id="@+id/burned"
                         style="?attr/borderlessButtonStyle"
-                        android:layout_width="0dp"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/burned"
-                        android:textSize="12sp" />
+                        android:text="@string/burned" />
 
                     <Button
                         android:id="@+id/recognize"
                         style="?attr/borderlessButtonStyle"
-                        android:layout_width="0dp"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/recognize"
-                        android:textSize="12sp" />
+                        android:text="@string/recognize" />
 
                     <CheckBox
                         android:id="@+id/on_screen"
-                        android:layout_width="0dp"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/on_screen"
-                        android:textSize="12sp" />
+                        android:text="@string/on_screen" />
 
                     <Button
                         android:id="@+id/translate"
                         style="?attr/borderlessButtonStyle"
-                        android:layout_width="0dp"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/translate"
-                        android:textSize="12sp" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal">
+                        android:text="@string/translate" />
 
                     <Button
                         android:id="@+id/show_transcript"
@@ -273,6 +258,19 @@
                         android:layout_height="wrap_content"
                         android:text="@string/details" />
 
+                    <Button
+                        android:id="@+id/mini"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/mini" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
                     <CheckBox
                         android:id="@+id/prose"
                         android:layout_width="wrap_content"
@@ -292,13 +290,6 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/player" />
-
-                    <Button
-                        android:id="@+id/mini"
-                        style="?attr/borderlessButtonStyle"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/mini" />
                 </LinearLayout>
 
                 <LinearLayout
