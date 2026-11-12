@@ -82,6 +82,8 @@ public final class MainActivity extends AppCompatActivity {
     private List<Browse.Found> exploreBack = Collections.emptyList();
     private Browse.Session exploreSession;
     private String pageUrl = "";
+    private String biliMixin = "";
+    private String biliBuvid = "";
     private List<StreamingService> exploreServices = Collections.emptyList();
     private String playUrl = "";
     private boolean libraryHits;
@@ -429,6 +431,46 @@ public final class MainActivity extends AppCompatActivity {
         if (exploreServices.isEmpty()) {
             return;
         }
+        if (chuteSelected()) {
+            loadChute(Chute.POPULAR, Chute.popularBody(), "BitChute");
+            return;
+        }
+        if (biliSelected()) {
+            loadBiliHome();
+            return;
+        }
+        if (nicoSelected()) {
+            loadNicoHome();
+            return;
+        }
+        if (rumbleSelected()) {
+            exploreStatus.setText("Paste a Rumble link. The feed is blocked here.");
+            return;
+        }
+        if (kickSelected()) {
+            loadKickHome();
+            return;
+        }
+        if (odyseeSelected()) {
+            loadOdysee(Odysee.PROXY + "claim_search", Odysee.popularBody(), "Odysee");
+            return;
+        }
+        if (fosdemSelected()) {
+            loadFosdem(Fosdem.HOME, "FOSDEM");
+            return;
+        }
+        if (archiveSelected()) {
+            loadArchive(Archive.homeUrl(), "Internet Archive");
+            return;
+        }
+        if (tedSelected()) {
+            loadTedHome();
+            return;
+        }
+        if (nasaSelected()) {
+            loadNasa(Nasa.homeUrl(), "NASA+");
+            return;
+        }
         int which = Math.max(exploreService.getSelectedItemPosition(), 0);
         StreamingService service = exploreServices.get(which);
         exploreStatus.setText("Loading");
@@ -556,8 +598,14 @@ public final class MainActivity extends AppCompatActivity {
                     if (page == null || page.isEmpty()) {
                         throw new java.io.IOException("no audio");
                     }
-                    StreamInfo info = StreamInfo.getInfo(page);
-                    String source = audioUrl(info);
+                    String source = "";
+                    try {
+                        source = audioUrl(StreamInfo.getInfo(page));
+                    } catch (Exception notNewPipe) {
+                        if (Bili.bvid(page) != null) {
+                            source = biliAudio(page);
+                        }
+                    }
                     if (source.isEmpty()) {
                         throw new java.io.IOException("no audio");
                     }
@@ -599,7 +647,9 @@ public final class MainActivity extends AppCompatActivity {
             if (dir == null) {
                 dir = getFilesDir();
             }
-            String ext = source.contains(".mp3") ? ".mp3" : ".m4a";
+            String ext = source.contains(".mp3") ? ".mp3"
+                    : source.contains(".mp4") || source.contains("upgcxcode")
+                    || source.contains("bilivideo") ? ".mp4" : ".m4a";
             java.io.File dest = new java.io.File(dir, id + ext);
             try {
                 download(source, dest, "Saving");
@@ -702,7 +752,103 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
-    private static String fetchText(String url) throws java.io.IOException {
+    private boolean chuteSelected() {
+        return exploreService.getSelectedItemPosition() == exploreServices.size();
+    }
+
+    private boolean biliSelected() {
+        return exploreService.getSelectedItemPosition() == exploreServices.size() + 1;
+    }
+
+    private boolean nicoSelected() {
+        return exploreService.getSelectedItemPosition() == exploreServices.size() + 2;
+    }
+
+    private boolean rumbleSelected() {
+        return exploreService.getSelectedItemPosition() == exploreServices.size() + 3;
+    }
+
+    private boolean kickSelected() {
+        return exploreService.getSelectedItemPosition() == exploreServices.size() + 4;
+    }
+
+    private boolean odyseeSelected() {
+        return exploreService.getSelectedItemPosition() == exploreServices.size() + 5;
+    }
+
+    private boolean fosdemSelected() {
+        return exploreService.getSelectedItemPosition() == exploreServices.size() + 6;
+    }
+
+    private boolean archiveSelected() {
+        return exploreService.getSelectedItemPosition() == exploreServices.size() + 7;
+    }
+
+    private boolean tedSelected() {
+        return exploreService.getSelectedItemPosition() == exploreServices.size() + 8;
+    }
+
+    private boolean nasaSelected() {
+        return exploreService.getSelectedItemPosition() == exploreServices.size() + 9;
+    }
+
+    /** Popular, search, or a channel. The first page only. */
+    private void loadChute(String url, String body, String label) {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                List<Browse.Found> rows = new ArrayList<>();
+                for (Chute.Clip clip : Chute.videos(postJson(url, body))) {
+                    rows.add(new Browse.Found(
+                            "video", clip.title, clip.page, clip.channel, clip.thumb));
+                }
+                runOnUiThread(() -> {
+                    exploreSession = null;
+                    exploreBack = Collections.emptyList();
+                    showExplore(rows, label);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void openChute(String page) {
+        showVideo();
+        exploreQuery.setText(page);
+        status.setText("Opening");
+        io.execute(() -> {
+            try {
+                String id = Chute.videoId(page);
+                Chute.Clip clip = Chute.video(postJson(Chute.VIDEO, Chute.idBody(id)));
+                String media = Chute.media(postJson(Chute.MEDIA, Chute.idBody(id)));
+                if (media.isEmpty()) {
+                    throw new java.io.IOException("no stream");
+                }
+                String channelKey = clip.channelId.isEmpty() ? clip.channel : clip.channelId;
+                long saved = Shelf.save(
+                        db, "BitChute", channelKey, blank(clip.channel, "BitChute"),
+                        clip.channelPage, clip.id, blank(clip.title, page), clip.page, media,
+                        List.of());
+                Shelf.setThumb(db, saved, clip.thumb);
+                Shelf.Video video = Shelf.video(db, saved);
+                String blurb = clip.description;
+                runOnUiThread(() -> {
+                    show(video);
+                    if (!blurb.isEmpty()) {
+                        description.setText(blurb);
+                    }
+                    status.setText("No transcript. Keep, then Recognize.");
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static String postJson(String url, String body) throws java.io.IOException {
         okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
                 .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
                 .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
@@ -710,8 +856,980 @@ public final class MainActivity extends AppCompatActivity {
         okhttp3.Request request = new okhttp3.Request.Builder()
                 .url(url)
                 .header("User-Agent", OkDownloader.USER_AGENT)
+                .header("Content-Type", "application/json")
+                .post(okhttp3.RequestBody.create(body, okhttp3.MediaType.parse("application/json")))
                 .build();
         try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private void loadNasa(String url, String label) {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                List<Browse.Found> rows = new ArrayList<>();
+                for (Nasa.Clip clip : Nasa.videos(fetchNasa(url))) {
+                    rows.add(new Browse.Found("video", clip.title, clip.page, "NASA", clip.thumb));
+                }
+                runOnUiThread(() -> {
+                    exploreSession = null;
+                    exploreBack = Collections.emptyList();
+                    showExplore(rows, label);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void openNasa(String page) {
+        showVideo();
+        exploreQuery.setText(page);
+        status.setText("Opening");
+        io.execute(() -> {
+            try {
+                Nasa.Clip clip = Nasa.one(fetchNasa(Nasa.slugUrl(Nasa.slug(page))));
+                if (clip.media.isEmpty()) {
+                    throw new java.io.IOException("no video");
+                }
+                long saved = Shelf.save(
+                        db, "NASA+", "nasa", "NASA", "https://plus.nasa.gov/",
+                        Nasa.slug(page), blank(clip.title, page), blank(clip.page, page),
+                        clip.media, List.of());
+                Shelf.setThumb(db, saved, clip.thumb);
+                Shelf.Video video = Shelf.video(db, saved);
+                runOnUiThread(() -> {
+                    if (videoId != saved) {
+                        show(video, false);
+                    }
+                    play(clip.media, 0);
+                    status.setText("No transcript. Keep, then Recognize.");
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static String fetchNasa(String url) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", OkDownloader.USER_AGENT)
+                .header("Accept", "application/json")
+                .header("Referer", "https://plus.nasa.gov/")
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private void loadTedHome() {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                showTed(Ted.home(postTed(Ted.GRAPHQL, Ted.homeBody())), "TED");
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void loadTedSearch(String query) {
+        exploreStatus.setText("Searching");
+        io.execute(() -> {
+            try {
+                showTed(Ted.hits(postTed(Ted.SEARCH, Ted.searchBody(query))), "TED");
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void showTed(List<Ted.Talk> talks, String label) {
+        try {
+            List<Browse.Found> rows = new ArrayList<>();
+            for (Ted.Talk talk : talks) {
+                rows.add(new Browse.Found("video", talk.title, talk.page, talk.speaker, talk.thumb));
+            }
+            runOnUiThread(() -> {
+                exploreSession = null;
+                exploreBack = Collections.emptyList();
+                showExplore(rows, label);
+            });
+        } catch (Exception e) {
+            String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+            runOnUiThread(() -> exploreStatus.setText(message));
+        }
+    }
+
+    private void openTed(String page, int position) {
+        showVideo();
+        exploreQuery.setText(page);
+        status.setText("Opening");
+        io.execute(() -> {
+            try {
+                String slug = Ted.slug(page);
+                Ted.Talk talk = Ted.details(postTed(Ted.GRAPHQL, Ted.detailsBody(slug)));
+                String media = Ted.choose(talk, qualityHeight);
+                if (media.isEmpty()) {
+                    throw new java.io.IOException("no video");
+                }
+                java.util.ArrayList<Shelf.TrackIn> tracks = new java.util.ArrayList<>();
+                if (!talk.metadata.isEmpty()) {
+                    for (Ted.Caption caption : Ted.captions(fetchTed(talk.metadata))) {
+                        try {
+                            Cues.Transcript transcript = Cues.parse(fetchTed(caption.url), "vtt", false);
+                            if (!transcript.spans.isEmpty()) {
+                                tracks.add(new Shelf.TrackIn(caption.lang, "manual", "captions", transcript));
+                            }
+                        } catch (Exception ignored) {
+                            // A missing caption file still leaves the talk playable.
+                        }
+                    }
+                }
+                long saved = Shelf.save(
+                        db, "TED", blank(talk.speaker, slug), blank(talk.speaker, "TED"),
+                        "", slug, blank(talk.title, slug), blank(talk.page, page), media, tracks);
+                Shelf.setThumb(db, saved, talk.thumb);
+                Shelf.Video video = Shelf.video(db, saved);
+                String note = tracks.isEmpty()
+                        ? "No transcript. Keep, then Recognize."
+                        : tracks.size() + " caption track" + (tracks.size() == 1 ? "" : "s");
+                runOnUiThread(() -> {
+                    if (videoId != saved) {
+                        show(video, false);
+                    }
+                    play(media, position);
+                    status.setText(note);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static String postTed(String url, String body) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", OkDownloader.USER_AGENT)
+                .header("Content-Type", "application/json")
+                .header("Origin", "https://www.ted.com")
+                .header("Referer", "https://www.ted.com/")
+                .post(okhttp3.RequestBody.create(body, okhttp3.MediaType.parse("application/json")))
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private static String fetchTed(String url) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", OkDownloader.USER_AGENT)
+                .header("Referer", "https://www.ted.com/")
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private void loadArchive(String url, String label) {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                List<Browse.Found> rows = new ArrayList<>();
+                for (Archive.Item item : Archive.docs(fetchArchive(url))) {
+                    rows.add(new Browse.Found(
+                            "video", item.title, item.page, item.creator, item.thumb));
+                }
+                runOnUiThread(() -> {
+                    exploreSession = null;
+                    exploreBack = Collections.emptyList();
+                    showExplore(rows, label);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void openArchive(String page, int position) {
+        showVideo();
+        exploreQuery.setText(page);
+        status.setText("Opening");
+        io.execute(() -> {
+            try {
+                String id = Archive.identifier(page);
+                Archive.Item item = Archive.item(fetchArchive(Archive.metadataUrl(id)), qualityHeight);
+                if (item.media.isEmpty()) {
+                    throw new java.io.IOException("no video");
+                }
+                java.util.ArrayList<Shelf.TrackIn> tracks = new java.util.ArrayList<>();
+                for (Archive.Caption caption : item.captions) {
+                    try {
+                        String body = fetchArchive(caption.url);
+                        String kind = caption.url.contains(".vtt") ? "vtt" : "srt";
+                        Cues.Transcript transcript = Cues.parse(body, kind, false);
+                        if (!transcript.spans.isEmpty()) {
+                            tracks.add(new Shelf.TrackIn(caption.lang, "auto", "captions", transcript));
+                        }
+                    } catch (Exception ignored) {
+                        // A missing caption file still leaves the item playable.
+                    }
+                }
+                long saved = Shelf.save(
+                        db, "Internet Archive", blank(item.creator, id), blank(item.creator, "Internet Archive"),
+                        "", id, blank(item.title, id), item.page, item.media, tracks);
+                Shelf.setThumb(db, saved, item.thumb);
+                Shelf.Video video = Shelf.video(db, saved);
+                String note = tracks.isEmpty()
+                        ? "No transcript. Keep, then Recognize."
+                        : tracks.size() + " caption track" + (tracks.size() == 1 ? "" : "s");
+                runOnUiThread(() -> {
+                    if (videoId != saved) {
+                        show(video, false);
+                    }
+                    play(item.media, position);
+                    status.setText(note);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static String fetchArchive(String url) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", OkDownloader.USER_AGENT)
+                .header("Accept", "application/json,text/plain,*/*")
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private void loadFosdem(String url, String label) {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                List<Browse.Found> rows = new ArrayList<>();
+                for (Fosdem.Talk talk : Fosdem.talks(fetchFosdem(url))) {
+                    rows.add(new Browse.Found(
+                            "video", talk.title, talk.page, talk.speaker, talk.thumb));
+                }
+                runOnUiThread(() -> {
+                    exploreSession = null;
+                    exploreBack = Collections.emptyList();
+                    showExplore(rows, label);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void openFosdem(String page) {
+        showVideo();
+        exploreQuery.setText(page);
+        status.setText("Opening");
+        io.execute(() -> {
+            try {
+                String[] key = Fosdem.key(page);
+                Fosdem.Talk talk = Fosdem.event(fetchFosdem(Fosdem.eventUrl(key[0], key[1])));
+                if (talk.media.isEmpty()) {
+                    throw new java.io.IOException("no video");
+                }
+                java.util.ArrayList<Shelf.TrackIn> tracks = new java.util.ArrayList<>();
+                for (Fosdem.Caption caption : talk.captions) {
+                    try {
+                        Cues.Transcript transcript = Cues.parse(fetchFosdem(caption.url), "vtt", false);
+                        if (!transcript.spans.isEmpty()) {
+                            String source = caption.label.toLowerCase(java.util.Locale.ROOT).contains("auto")
+                                    ? "auto" : "manual";
+                            tracks.add(new Shelf.TrackIn(
+                                    caption.lang, source, blank(caption.label, "captions"), transcript));
+                        }
+                    } catch (Exception ignored) {
+                        // A missing caption file still leaves the talk playable.
+                    }
+                }
+                long saved = Shelf.save(
+                        db, "FOSDEM", blank(talk.speaker, "FOSDEM"), blank(talk.speaker, "FOSDEM"),
+                        "", talk.slug, blank(talk.title, page), blank(talk.page, page),
+                        talk.media, tracks);
+                Shelf.setThumb(db, saved, talk.thumb);
+                Shelf.Video video = Shelf.video(db, saved);
+                String note = tracks.isEmpty()
+                        ? "No transcript. Keep, then Recognize."
+                        : tracks.size() + " caption track" + (tracks.size() == 1 ? "" : "s");
+                runOnUiThread(() -> {
+                    if (videoId != saved) {
+                        show(video, false);
+                    }
+                    play(talk.media, 0);
+                    status.setText(note);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static String fetchFosdem(String url) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", OkDownloader.USER_AGENT)
+                .header("Accept", "application/json,text/vtt,*/*")
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private void loadOdysee(String url, String body, String label) {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                List<Browse.Found> rows = new ArrayList<>();
+                for (Odysee.Clip clip : Odysee.videos(postOdysee(url, body))) {
+                    rows.add(new Browse.Found(
+                            "video", clip.title, clip.page, clip.channel, clip.thumb));
+                }
+                runOnUiThread(() -> {
+                    exploreSession = null;
+                    exploreBack = Collections.emptyList();
+                    showExplore(rows, label);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void loadOdyseeChannel(String uri) {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                Odysee.Clip channel = Odysee.resolved(postOdysee(
+                        Odysee.PROXY + "resolve", Odysee.resolveBody(uri)));
+                if (channel.id.isEmpty()) {
+                    throw new java.io.IOException("no channel");
+                }
+                List<Browse.Found> rows = new ArrayList<>();
+                for (Odysee.Clip clip : Odysee.videos(postOdysee(
+                        Odysee.PROXY + "claim_search", Odysee.channelBody(channel.id)))) {
+                    rows.add(new Browse.Found(
+                            "video", clip.title, clip.page, clip.channel, clip.thumb));
+                }
+                String label = blank(channel.channel, "Odysee");
+                runOnUiThread(() -> {
+                    exploreSession = null;
+                    exploreBack = Collections.emptyList();
+                    showExplore(rows, label);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void openOdysee(String uri, String page) {
+        showVideo();
+        exploreQuery.setText(page);
+        status.setText("Opening");
+        io.execute(() -> {
+            try {
+                Odysee.Clip clip = Odysee.resolved(postOdysee(
+                        Odysee.PROXY + "resolve", Odysee.resolveBody(uri)));
+                if (clip.id.isEmpty()) {
+                    throw new java.io.IOException("no video");
+                }
+                if (clip.media.isEmpty()) {
+                    throw new java.io.IOException("This video needs an Odysee login");
+                }
+                String channelKey = clip.channelId.isEmpty() ? clip.channel : clip.channelId;
+                long saved = Shelf.save(
+                        db, "Odysee", channelKey, blank(clip.channel, "Odysee"),
+                        clip.channelPage, clip.id, blank(clip.title, page),
+                        blank(clip.page, page), clip.media, List.of());
+                Shelf.setThumb(db, saved, clip.thumb);
+                Shelf.Video video = Shelf.video(db, saved);
+                runOnUiThread(() -> {
+                    if (videoId != saved) {
+                        show(video, false);
+                    }
+                    play(clip.media, 0);
+                    status.setText("No transcript. Keep, then Recognize.");
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static String postOdysee(String url, String body) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", OkDownloader.USER_AGENT)
+                .header("Content-Type", "application/json")
+                .header("Origin", "https://odysee.com")
+                .header("Referer", "https://odysee.com/")
+                .post(okhttp3.RequestBody.create(body, okhttp3.MediaType.parse("application/json")))
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private void loadKickHome() {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                showKick(Kick.livestreams(fetchKick(Kick.HOME)), "Kick");
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void loadKickSearch(String query) {
+        exploreStatus.setText("Searching");
+        io.execute(() -> {
+            try {
+                showKick(Kick.livestreams(fetchKick(Kick.searchUrl(query))), "Kick");
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void showKick(List<Kick.Clip> clips, String label) {
+        List<Browse.Found> rows = new ArrayList<>();
+        for (Kick.Clip clip : clips) {
+            rows.add(new Browse.Found("video", clip.title, clip.page, clip.author, clip.thumb));
+        }
+        runOnUiThread(() -> {
+            exploreSession = null;
+            exploreBack = Collections.emptyList();
+            showExplore(rows, label);
+        });
+    }
+
+    private void openKick(String page) {
+        showVideo();
+        exploreQuery.setText(page);
+        status.setText("Opening");
+        io.execute(() -> {
+            try {
+                String slug = Kick.slug(page);
+                Kick.Clip clip = Kick.channel(fetchKick(Kick.channelUrl(slug)));
+                if (clip.playback.isEmpty()) {
+                    throw new java.io.IOException("Channel is not live");
+                }
+                long saved = Shelf.save(
+                        db, "Kick", slug, blank(clip.author, slug), clip.page, slug,
+                        blank(clip.title, slug), clip.page, clip.playback, List.of());
+                Shelf.setThumb(db, saved, clip.thumb);
+                Shelf.Video video = Shelf.video(db, saved);
+                runOnUiThread(() -> {
+                    if (videoId != saved) {
+                        show(video, false);
+                    }
+                    play(clip.playback, 0);
+                    status.setText("Live. No transcript.");
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static String fetchKick(String url) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", OkDownloader.USER_AGENT)
+                .header("Accept", "application/json")
+                .header("Origin", "https://kick.com")
+                .header("Referer", "https://kick.com/")
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private void openRumble(String page) {
+        openRumbleAt(page, 0);
+    }
+
+    private void openRumbleAt(String page, int position) {
+        showVideo();
+        exploreQuery.setText(page);
+        status.setText("Opening");
+        io.execute(() -> {
+            try {
+                String embed = Rumble.embedPage(Rumble.embedId(page) == null ? "" : Rumble.embedId(page));
+                String title = page;
+                String author = "Rumble";
+                String authorUrl = "";
+                String thumb = "";
+                if (Rumble.embedId(page) == null) {
+                    Rumble.Clip clip = Rumble.oembed(fetchRumble(Rumble.oembedUrl(page)));
+                    if (clip.embed.isEmpty()) {
+                        throw new java.io.IOException("no embed");
+                    }
+                    embed = clip.embed;
+                    title = clip.title;
+                    author = clip.author;
+                    authorUrl = clip.authorUrl;
+                    thumb = clip.thumb;
+                }
+                String html = fetchRumble(embed);
+                if (Rumble.challenged(html)) {
+                    throw new java.io.IOException("blocked");
+                }
+                if (Rumble.embedId(page) != null) {
+                    title = blank(Rumble.pageTitle(html), page);
+                }
+                String media = Rumble.choose(Rumble.streams(html), qualityHeight);
+                if (media.isEmpty()) {
+                    throw new java.io.IOException("no stream");
+                }
+                String id = Rumble.embedId(embed);
+                long saved = Shelf.save(
+                        db, "Rumble", blank(authorUrl, author), blank(author, "Rumble"),
+                        authorUrl, blank(id, page), blank(title, page), page, media, List.of());
+                Shelf.setThumb(db, saved, thumb);
+                Shelf.Video video = Shelf.video(db, saved);
+                runOnUiThread(() -> {
+                    if (videoId != saved) {
+                        show(video, false);
+                    }
+                    play(media, position);
+                    status.setText("No transcript. Keep, then Recognize.");
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static String fetchRumble(String url) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", Nico.UA)
+                .header("Referer", "https://rumble.com/")
+                .header("Accept", "text/html,application/json")
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private void loadNicoHome() {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                showNico(Nico.videos(fetchNico(Nico.HOME).body), "Niconico");
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void loadNicoSearch(String query) {
+        exploreStatus.setText("Searching");
+        io.execute(() -> {
+            try {
+                showNico(Nico.videos(fetchNico(Nico.searchUrl(query)).body), "Niconico");
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void loadNicoUser(String id) {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                showNico(Nico.videos(fetchNico(Nico.userUrl(id)).body), "Niconico");
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void showNico(List<Nico.Clip> clips, String label) {
+        List<Browse.Found> rows = new ArrayList<>();
+        for (Nico.Clip clip : clips) {
+            rows.add(new Browse.Found("video", clip.title, clip.page, clip.channel, clip.thumb));
+        }
+        runOnUiThread(() -> {
+            exploreSession = null;
+            exploreBack = Collections.emptyList();
+            showExplore(rows, label);
+        });
+    }
+
+    private void openNico(String page) {
+        showVideo();
+        exploreQuery.setText(page);
+        status.setText("Opening");
+        playNico(page, 0);
+    }
+
+    private void playNico(String page, int position) {
+        io.execute(() -> {
+            try {
+                NicoPage watched = fetchNico(page);
+                String cookie = watched.cookie.isEmpty() ? PlayService.nicoCookie : watched.cookie;
+                Nico.Watch watch = Nico.watch(watched.body);
+                String[] chosen = Nico.pair(watch, qualityHeight);
+                if (chosen[0].isEmpty()) {
+                    throw new java.io.IOException("no stream");
+                }
+                String hls = Nico.contentUrl(postNico(
+                        Nico.hlsUrl(watch.clip.id, watch.trackId),
+                        Nico.hlsBody(chosen[0], chosen[1]),
+                        watch.accessKey,
+                        cookie));
+                if (hls.isEmpty()) {
+                    throw new java.io.IOException("no stream");
+                }
+                PlayService.nicoCookie = cookie;
+                String channelKey = watch.clip.channelId.isEmpty() ? watch.clip.channel : watch.clip.channelId;
+                long saved = Shelf.save(
+                        db, "Niconico", channelKey, blank(watch.clip.channel, "Niconico"),
+                        watch.clip.channelPage, watch.clip.id, blank(watch.clip.title, page),
+                        watch.clip.page, hls, List.of());
+                Shelf.setThumb(db, saved, watch.clip.thumb);
+                Shelf.Video video = Shelf.video(db, saved);
+                String blurb = watch.clip.description;
+                runOnUiThread(() -> {
+                    if (videoId != saved) {
+                        show(video, false);
+                    }
+                    if (!blurb.isEmpty()) {
+                        description.setText(blurb);
+                    }
+                    play(hls, position);
+                    status.setText("No transcript. Keep, then Recognize.");
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static final class NicoPage {
+        final String body;
+        final String cookie;
+
+        NicoPage(String body, String cookie) {
+            this.body = body;
+            this.cookie = cookie;
+        }
+    }
+
+    private static NicoPage fetchNico(String url) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", Nico.UA)
+                .header("Accept-Language", "ja,en;q=0.7")
+                .header("Referer", "https://www.nicovideo.jp/")
+                .header("X-Frontend-Id", "6")
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            String cookie = "";
+            for (String header : response.headers("Set-Cookie")) {
+                String found = Nico.cookie(header);
+                if (!found.isEmpty()) {
+                    cookie = found;
+                }
+            }
+            return new NicoPage(response.body().string(), cookie);
+        }
+    }
+
+    private static String postNico(String url, String body, String key, String cookie)
+            throws java.io.IOException {
+        okhttp3.Request.Builder request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", Nico.UA)
+                .header("Content-Type", "application/json")
+                .header("x-access-right-key", key)
+                .header("x-request-with", "nicovideo")
+                .header("x-frontend-id", "6")
+                .header("Referer", "https://www.nicovideo.jp/");
+        if (cookie != null && !cookie.isEmpty()) {
+            request.header("Cookie", cookie);
+        }
+        okhttp3.Request built = request
+                .post(okhttp3.RequestBody.create(body, okhttp3.MediaType.parse("application/json")))
+                .build();
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        try (okhttp3.Response response = client.newCall(built).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private void loadBiliHome() {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                ensureBili();
+                showBili(Bili.home(fetchText(Bili.HOME, biliBuvid)), "Bilibili");
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void loadBiliSearch(String query) {
+        exploreStatus.setText("Searching");
+        io.execute(() -> {
+            try {
+                ensureBili();
+                String body = fetchText(Bili.searchUrl(query, biliMixin, now()), biliBuvid);
+                showBili(Bili.search(body), "Bilibili");
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void loadBiliSpace(String mid) {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                ensureBili();
+                String body = fetchText(Bili.spaceUrl(mid, biliMixin, now()), biliBuvid);
+                showBili(Bili.space(body), "Bilibili");
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void showBili(List<Bili.Clip> clips, String label) {
+        List<Browse.Found> rows = new ArrayList<>();
+        for (Bili.Clip clip : clips) {
+            rows.add(new Browse.Found("video", clip.title, clip.page, clip.channel, clip.thumb));
+        }
+        runOnUiThread(() -> {
+            exploreSession = null;
+            exploreBack = Collections.emptyList();
+            showExplore(rows, label);
+        });
+    }
+
+    private void openBili(String page) {
+        showVideo();
+        exploreQuery.setText(page);
+        status.setText("Opening");
+        playBili(page, 0);
+    }
+
+    /** Refetches the picture and audio and starts them together. */
+    private void playBili(String page, int position) {
+        io.execute(() -> {
+            try {
+                long saved = saveBili(page);
+                Bili.Pair pair = lastBili;
+                Shelf.Video video = Shelf.video(db, saved);
+                String blurb = lastBiliNote;
+                runOnUiThread(() -> {
+                    if (videoId != saved) {
+                        show(video, false);
+                    }
+                    if (!blurb.isEmpty()) {
+                        description.setText(blurb);
+                    }
+                    if (pair.video.isEmpty()) {
+                        play(pair.audio, position);
+                    } else if (pair.audio.isEmpty()) {
+                        play(pair.video, position);
+                    } else {
+                        playPair(pair.video, pair.audio, position);
+                    }
+                    status.setText("No transcript. Keep, then Recognize.");
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private Bili.Pair lastBili = new Bili.Pair("", "");
+    private String lastBiliNote = "";
+
+    private long saveBili(String page) throws java.io.IOException {
+        ensureBili();
+        String id = Bili.bvid(page);
+        Bili.Clip clip = Bili.video(fetchText(Bili.viewUrl(id), biliBuvid));
+        if (clip.cid.isEmpty()) {
+            throw new java.io.IOException("no Bilibili video");
+        }
+        String play = fetchText(Bili.playUrl(id, clip.cid, biliMixin, now()), biliBuvid);
+        Bili.Pair pair = Bili.choose(play, qualityHeight);
+        if (pair.video.isEmpty() && pair.audio.isEmpty()) {
+            throw new java.io.IOException("no stream");
+        }
+        lastBili = pair;
+        lastBiliNote = clip.description;
+        String stored = pair.video.isEmpty() ? pair.audio : pair.video;
+        String channelKey = clip.channelId.isEmpty() ? clip.channel : clip.channelId;
+        long saved = Shelf.save(
+                db, "Bilibili", channelKey, blank(clip.channel, "Bilibili"),
+                clip.channelPage, clip.id, blank(clip.title, page), clip.page, stored, List.of());
+        Shelf.setThumb(db, saved, clip.thumb);
+        return saved;
+    }
+
+    /** The separate audio file for a Bilibili video, used when the kept picture has no sound. */
+    private String biliAudio(String page) throws java.io.IOException {
+        ensureBili();
+        String id = Bili.bvid(page);
+        Bili.Clip clip = Bili.video(fetchText(Bili.viewUrl(id), biliBuvid));
+        if (clip.cid.isEmpty()) {
+            return "";
+        }
+        String play = fetchText(Bili.playUrl(id, clip.cid, biliMixin, now()), biliBuvid);
+        return Bili.choose(play, 0).audio;
+    }
+
+    private void ensureBili() throws java.io.IOException {
+        if (!biliMixin.isEmpty() && !biliBuvid.isEmpty()) {
+            return;
+        }
+        String mixin = Bili.mixinKey(fetchText(Bili.NAV), fetchText(Bili.HEADER));
+        String buvid = Bili.buvid(fetchText(Bili.SPI));
+        if (mixin.isEmpty() || buvid.isEmpty()) {
+            throw new java.io.IOException("no Bilibili key");
+        }
+        biliMixin = mixin;
+        biliBuvid = buvid;
+    }
+
+    private static long now() {
+        return System.currentTimeMillis() / 1000L;
+    }
+
+    private static String fetchText(String url) throws java.io.IOException {
+        return fetchText(url, "");
+    }
+
+    private static String fetchText(String url, String buvid) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request.Builder request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", OkDownloader.USER_AGENT)
+                .header("Referer", "https://www.bilibili.com/");
+        if (buvid != null && !buvid.isEmpty()) {
+            request.header("Cookie", "buvid3=" + buvid);
+        }
+        okhttp3.Request built = request.build();
+        try (okhttp3.Response response = client.newCall(built).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
                 throw new java.io.IOException("HTTP " + response.code());
             }
@@ -729,10 +1847,23 @@ public final class MainActivity extends AppCompatActivity {
                 .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
                 .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
                 .build();
-        okhttp3.Request request = new okhttp3.Request.Builder()
+        okhttp3.Request.Builder requestBuilder = new okhttp3.Request.Builder()
                 .url(source)
-                .header("User-Agent", OkDownloader.USER_AGENT)
-                .build();
+                .header("User-Agent", OkDownloader.USER_AGENT);
+        if (source.contains("bilivideo") || source.contains("upgcxcode")) {
+            requestBuilder.header("Referer", "https://www.bilibili.com/");
+        }
+        if (source.contains("rumble.cloud")) {
+            requestBuilder.header("Referer", "https://rumble.com/");
+        }
+        if (source.contains("odycdn.com")) {
+            requestBuilder.header("Referer", "https://odysee.com/");
+            requestBuilder.header("Origin", "https://odysee.com");
+        }
+        if (source.contains("ted.com")) {
+            requestBuilder.header("Referer", "https://www.ted.com/");
+        }
+        okhttp3.Request request = requestBuilder.build();
         try (okhttp3.Response response = client.newCall(request).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
                 throw new java.io.IOException("HTTP " + response.code());
@@ -771,6 +1902,16 @@ public final class MainActivity extends AppCompatActivity {
         for (StreamingService service : exploreServices) {
             names.add(service.getServiceInfo().getName());
         }
+        names.add("BitChute");
+        names.add("Bilibili");
+        names.add("Niconico");
+        names.add("Rumble");
+        names.add("Kick");
+        names.add("Odysee");
+        names.add("FOSDEM");
+        names.add("Internet Archive");
+        names.add("TED");
+        names.add("NASA+");
         exploreService.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
@@ -806,7 +1947,112 @@ public final class MainActivity extends AppCompatActivity {
         int which = Math.max(exploreService.getSelectedItemPosition(), 0);
         io.execute(() -> {
             try {
-                StreamingService service = exploreServices.get(which);
+                if (Chute.videoId(typed) != null) {
+                    runOnUiThread(() -> openChute(typed));
+                    return;
+                }
+                String chuteChannel = Chute.channelId(typed);
+                if (chuteChannel != null) {
+                    loadChute(Chute.CHANNEL, Chute.channelBody(chuteChannel), "BitChute");
+                    return;
+                }
+                if (chuteSelected() && !typed.contains("://")) {
+                    loadChute(Chute.SEARCH, Chute.searchBody(typed), "BitChute");
+                    return;
+                }
+                String biliId = Bili.bvid(typed);
+                if (biliId != null) {
+                    runOnUiThread(() -> openBili(typed));
+                    return;
+                }
+                String biliChannel = Bili.mid(typed);
+                if (biliChannel != null) {
+                    loadBiliSpace(biliChannel);
+                    return;
+                }
+                if (biliSelected() && !typed.contains("://")) {
+                    loadBiliSearch(typed);
+                    return;
+                }
+                if (Nico.videoId(typed) != null) {
+                    runOnUiThread(() -> openNico(typed));
+                    return;
+                }
+                String nicoUser = Nico.userId(typed);
+                if (nicoUser != null) {
+                    loadNicoUser(nicoUser);
+                    return;
+                }
+                if (nicoSelected() && !typed.contains("://")) {
+                    loadNicoSearch(typed);
+                    return;
+                }
+                if (Rumble.embedId(typed) != null || Rumble.isWatch(typed)) {
+                    runOnUiThread(() -> openRumble(typed));
+                    return;
+                }
+                if (rumbleSelected() && !typed.contains("://")) {
+                    runOnUiThread(() -> exploreStatus.setText(
+                            "Paste a Rumble link. Search is blocked here."));
+                    return;
+                }
+                String kickSlug = Kick.slug(typed);
+                if (kickSlug != null) {
+                    runOnUiThread(() -> openKick(typed));
+                    return;
+                }
+                if (kickSelected() && !typed.contains("://")) {
+                    loadKickSearch(typed);
+                    return;
+                }
+                String odyseeVideo = Odysee.videoUri(typed);
+                if (odyseeVideo != null) {
+                    runOnUiThread(() -> openOdysee(odyseeVideo, typed));
+                    return;
+                }
+                String odyseeChannel = Odysee.channelUri(typed);
+                if (odyseeChannel != null) {
+                    loadOdyseeChannel(odyseeChannel);
+                    return;
+                }
+                if (odyseeSelected() && !typed.contains("://")) {
+                    loadOdysee(Odysee.PROXY + "claim_search", Odysee.searchBody(typed), "Odysee");
+                    return;
+                }
+                if (Fosdem.key(typed) != null) {
+                    runOnUiThread(() -> openFosdem(typed));
+                    return;
+                }
+                if (fosdemSelected() && !typed.contains("://")) {
+                    loadFosdem(Fosdem.searchUrl(typed), "FOSDEM");
+                    return;
+                }
+                if (Archive.identifier(typed) != null) {
+                    runOnUiThread(() -> openArchive(typed, 0));
+                    return;
+                }
+                if (archiveSelected() && !typed.contains("://")) {
+                    loadArchive(Archive.searchUrl(typed), "Internet Archive");
+                    return;
+                }
+                if (Ted.slug(typed) != null) {
+                    runOnUiThread(() -> openTed(typed, 0));
+                    return;
+                }
+                if (tedSelected() && !typed.contains("://")) {
+                    loadTedSearch(typed);
+                    return;
+                }
+                if (Nasa.slug(typed) != null) {
+                    runOnUiThread(() -> openNasa(typed));
+                    return;
+                }
+                if (nasaSelected() && !typed.contains("://")) {
+                    loadNasa(Nasa.searchUrl(typed), "NASA+");
+                    return;
+                }
+                int serviceAt = which < exploreServices.size() ? which : 0;
+                StreamingService service = exploreServices.get(serviceAt);
                 StreamingService.LinkType link = null;
                 try {
                     StreamingService byUrl = NewPipe.getServiceByUrl(typed);
@@ -981,6 +2227,47 @@ public final class MainActivity extends AppCompatActivity {
             openEpisode(item.url);
             return;
         }
+        if (Chute.videoId(item.url) != null) {
+            openChute(item.url);
+            return;
+        }
+        if (Bili.bvid(item.url) != null) {
+            openBili(item.url);
+            return;
+        }
+        if (Nico.videoId(item.url) != null) {
+            openNico(item.url);
+            return;
+        }
+        if (Rumble.embedId(item.url) != null || Rumble.isWatch(item.url)) {
+            openRumble(item.url);
+            return;
+        }
+        if (Kick.slug(item.url) != null) {
+            openKick(item.url);
+            return;
+        }
+        String odyseeVideo = Odysee.videoUri(item.url);
+        if (odyseeVideo != null) {
+            openOdysee(odyseeVideo, item.url);
+            return;
+        }
+        if (Fosdem.key(item.url) != null) {
+            openFosdem(item.url);
+            return;
+        }
+        if (Archive.identifier(item.url) != null) {
+            openArchive(item.url, 0);
+            return;
+        }
+        if (Ted.slug(item.url) != null) {
+            openTed(item.url, 0);
+            return;
+        }
+        if (Nasa.slug(item.url) != null) {
+            openNasa(item.url);
+            return;
+        }
         if ("video".equals(item.kind)) {
             openVideo(item.url);
             return;
@@ -1021,7 +2308,17 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         int which = Math.max(exploreService.getSelectedItemPosition(), 0);
-        String service = exploreServices.get(which).getServiceInfo().getName();
+        String service = which < exploreServices.size()
+                ? exploreServices.get(which).getServiceInfo().getName()
+                : which == exploreServices.size() ? "BitChute"
+                : which == exploreServices.size() + 1 ? "Bilibili"
+                : which == exploreServices.size() + 2 ? "Niconico"
+                : which == exploreServices.size() + 3 ? "Rumble"
+                : which == exploreServices.size() + 4 ? "Kick"
+                : which == exploreServices.size() + 5 ? "Odysee"
+                : which == exploreServices.size() + 6 ? "FOSDEM"
+                : which == exploreServices.size() + 7 ? "Internet Archive"
+                : which == exploreServices.size() + 8 ? "TED" : "NASA+";
         Shelf.bookmark(db, item.kind, service, item.url, item.name);
         exploreStatus.setText("Bookmarked");
     }
@@ -1173,6 +2470,49 @@ public final class MainActivity extends AppCompatActivity {
             status.setText("No source is stored for this video");
             return;
         }
+        if (Chute.videoId(pageUrl) != null) {
+            status.setText("This video has one quality");
+            return;
+        }
+        if (Bili.bvid(pageUrl) != null) {
+            qualityHeight = height;
+            status.setText("Quality " + qualityLabel(height));
+            playBili(pageUrl, (int) Math.max(player.getCurrentPosition(), 0));
+            return;
+        }
+        if (Nico.videoId(pageUrl) != null) {
+            qualityHeight = height;
+            status.setText("Quality " + qualityLabel(height));
+            playNico(pageUrl, (int) Math.max(player.getCurrentPosition(), 0));
+            return;
+        }
+        if (Kick.slug(pageUrl) != null || Odysee.videoUri(pageUrl) != null
+                || Fosdem.key(pageUrl) != null) {
+            status.setText("This stream has one quality");
+            return;
+        }
+        if (Nasa.slug(pageUrl) != null) {
+            status.setText("This stream has one quality");
+            return;
+        }
+        if (Ted.slug(pageUrl) != null) {
+            qualityHeight = height;
+            status.setText("Quality " + qualityLabel(height));
+            openTed(pageUrl, (int) Math.max(player.getCurrentPosition(), 0));
+            return;
+        }
+        if (Archive.identifier(pageUrl) != null) {
+            qualityHeight = height;
+            status.setText("Quality " + qualityLabel(height));
+            openArchive(pageUrl, (int) Math.max(player.getCurrentPosition(), 0));
+            return;
+        }
+        if (Rumble.isWatch(pageUrl) || Rumble.embedId(pageUrl) != null) {
+            qualityHeight = height;
+            status.setText("Quality " + qualityLabel(height));
+            openRumbleAt(pageUrl, (int) Math.max(player.getCurrentPosition(), 0));
+            return;
+        }
         qualityHeight = height;
         int at = (int) Math.max(player.getCurrentPosition(), 0);
         String page = pageUrl;
@@ -1224,10 +2564,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void playPair(String videoUrl, String audioUrl, int position) {
         playUrl = videoUrl;
-        androidx.media3.datasource.DefaultHttpDataSource.Factory http =
-                new androidx.media3.datasource.DefaultHttpDataSource.Factory()
-                        .setUserAgent(OkDownloader.USER_AGENT);
-        DefaultMediaSourceFactory factory = new DefaultMediaSourceFactory(this).setDataSourceFactory(http);
+        DefaultMediaSourceFactory factory = new DefaultMediaSourceFactory(PlayService.sources());
         MediaSource picture = factory.createMediaSource(new MediaItem.Builder()
                 .setUri(videoUrl)
                 .setMediaMetadata(new androidx.media3.common.MediaMetadata.Builder()
@@ -1469,6 +2806,60 @@ public final class MainActivity extends AppCompatActivity {
         status.setText("Opening");
         String page = pageUrl;
         long id = videoId;
+        if (Chute.videoId(page) != null) {
+            String chute = Chute.videoId(page);
+            io.execute(() -> {
+                try {
+                    String media = Chute.media(postJson(Chute.MEDIA, Chute.idBody(chute)));
+                    if (media.isEmpty()) {
+                        throw new java.io.IOException("no stream");
+                    }
+                    Shelf.setPlayUrl(db, id, media);
+                    runOnUiThread(() -> play(media, t0));
+                } catch (Exception e) {
+                    runOnUiThread(() -> status.setText("This video is gone"));
+                }
+            });
+            return;
+        }
+        if (Bili.bvid(page) != null) {
+            playBili(page, t0);
+            return;
+        }
+        if (Nico.videoId(page) != null) {
+            playNico(page, t0);
+            return;
+        }
+        if ((Rumble.isWatch(page) || Rumble.embedId(page) != null)
+                && playUrl != null && playUrl.contains("rumble.cloud")) {
+            play(playUrl, t0);
+            return;
+        }
+        if (Kick.slug(page) != null) {
+            openKick(page);
+            return;
+        }
+        if (Odysee.videoUri(page) != null && playUrl != null && playUrl.contains("odycdn.com")) {
+            play(playUrl, t0);
+            return;
+        }
+        if (Fosdem.key(page) != null && playUrl != null && playUrl.contains(".mp4")) {
+            play(playUrl, t0);
+            return;
+        }
+        if (Archive.identifier(page) != null && playUrl != null && playUrl.contains("archive.org/download/")) {
+            play(playUrl, t0);
+            return;
+        }
+        if (Ted.slug(page) != null && playUrl != null
+                && (playUrl.contains("download.ted.com") || playUrl.contains("hls.ted.com"))) {
+            play(playUrl, t0);
+            return;
+        }
+        if (Nasa.slug(page) != null && playUrl != null && playUrl.contains(".m3u8")) {
+            play(playUrl, t0);
+            return;
+        }
         io.execute(() -> {
             try {
                 StreamInfo info = StreamInfo.getInfo(page);
@@ -1511,6 +2902,10 @@ public final class MainActivity extends AppCompatActivity {
         try {
             NewPipe.getServiceByUrl(page);
         } catch (Exception notAService) {
+            if (playUrl != null && playUrl.contains(".m3u8")) {
+                status.setText("This stream is a playlist");
+                return;
+            }
             keepDirect(playUrl, id);
             return;
         }
@@ -1937,7 +3332,13 @@ public final class MainActivity extends AppCompatActivity {
         filling = false;
         render();
         player.setPlaybackSpeed(speed);
-        if (prepare && video.playUrl != null && !video.playUrl.isEmpty()) {
+        if (prepare && Bili.bvid(pageUrl) != null) {
+            playBili(pageUrl, 0);
+        } else if (prepare && Nico.videoId(pageUrl) != null) {
+            playNico(pageUrl, 0);
+        } else if (prepare && Kick.slug(pageUrl) != null) {
+            openKick(pageUrl);
+        } else if (prepare && video.playUrl != null && !video.playUrl.isEmpty()) {
             player.setMediaItem(new MediaItem.Builder()
                     .setUri(video.playUrl)
                     .setMediaMetadata(new androidx.media3.common.MediaMetadata.Builder()

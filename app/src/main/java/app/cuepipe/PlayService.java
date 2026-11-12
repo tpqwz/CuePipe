@@ -42,11 +42,8 @@ public final class PlayService extends Service {
     static ExoPlayer player(Context context) {
         if (shared == null) {
             Context app = context.getApplicationContext();
-            androidx.media3.datasource.DefaultHttpDataSource.Factory http =
-                    new androidx.media3.datasource.DefaultHttpDataSource.Factory()
-                            .setUserAgent(OkDownloader.USER_AGENT);
             shared = new ExoPlayer.Builder(app)
-                    .setMediaSourceFactory(new DefaultMediaSourceFactory(app).setDataSourceFactory(http))
+                    .setMediaSourceFactory(new DefaultMediaSourceFactory(app).setDataSourceFactory(sources()))
                     .setAudioAttributes(new AudioAttributes.Builder()
                             .setUsage(C.USAGE_MEDIA)
                             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -189,5 +186,84 @@ public final class PlayService extends Service {
     private PendingIntent pending(String action) {
         Intent intent = new Intent(this, PlayService.class).setAction(action);
         return PendingIntent.getService(this, action.hashCode(), intent, PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    /** nicosid from the watch page. The HLS playlist refuses a request without it. */
+    static volatile String nicoCookie = "";
+
+    /** Bilibili's CDN refuses a request that has no Referer. */
+    static androidx.media3.datasource.DataSource.Factory sources() {
+        androidx.media3.datasource.DefaultHttpDataSource.Factory http =
+                new androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                        .setUserAgent(OkDownloader.USER_AGENT);
+        return () -> new Referer(http.createDataSource());
+    }
+
+    private static final class Referer implements androidx.media3.datasource.DataSource {
+        private final androidx.media3.datasource.DefaultHttpDataSource inner;
+
+        Referer(androidx.media3.datasource.DefaultHttpDataSource inner) {
+            this.inner = inner;
+        }
+
+        @Override
+        public void addTransferListener(androidx.media3.datasource.TransferListener listener) {
+            inner.addTransferListener(listener);
+        }
+
+        @Override
+        public long open(androidx.media3.datasource.DataSpec spec) throws java.io.IOException {
+            String host = spec.uri.getHost() == null ? "" : spec.uri.getHost();
+            String path = spec.uri.getPath() == null ? "" : spec.uri.getPath();
+            if (host.contains("bilivideo") || host.contains("hdslb")
+                    || (host.contains("akamaized") && path.contains("upgcxcode"))) {
+                inner.setRequestProperty("Referer", "https://www.bilibili.com/");
+            }
+            if (host.contains("rumble.cloud")) {
+                inner.setRequestProperty("Referer", "https://rumble.com/");
+            }
+            if (host.contains("nasaplus.akamaized.net")) {
+                inner.setRequestProperty("Referer", "https://plus.nasa.gov/");
+            }
+            if (host.contains("ted.com") || host.contains("tedcdn.com")) {
+                inner.setRequestProperty("Referer", "https://www.ted.com/");
+            }
+            if (host.contains("odycdn.com")) {
+                inner.setRequestProperty("Referer", "https://odysee.com/");
+                inner.setRequestProperty("Origin", "https://odysee.com");
+            }
+            if (host.contains("live-video.net") || host.contains("kick.com")) {
+                inner.setRequestProperty("Referer", "https://kick.com/");
+                inner.setRequestProperty("Origin", "https://kick.com");
+            }
+            if (host.contains("nicovideo.jp")) {
+                inner.setRequestProperty("User-Agent", Nico.UA);
+                inner.setRequestProperty("Referer", "https://www.nicovideo.jp/");
+                if (nicoCookie != null && !nicoCookie.isEmpty()) {
+                    inner.setRequestProperty("Cookie", nicoCookie);
+                }
+            }
+            return inner.open(spec);
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws java.io.IOException {
+            return inner.read(buffer, offset, length);
+        }
+
+        @Override
+        public android.net.Uri getUri() {
+            return inner.getUri();
+        }
+
+        @Override
+        public java.util.Map<String, java.util.List<String>> getResponseHeaders() {
+            return inner.getResponseHeaders();
+        }
+
+        @Override
+        public void close() throws java.io.IOException {
+            inner.close();
+        }
     }
 }
