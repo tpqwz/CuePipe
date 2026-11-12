@@ -471,6 +471,10 @@ public final class MainActivity extends AppCompatActivity {
             loadNasa(Nasa.homeUrl(), "NASA+");
             return;
         }
+        if (redBullSelected()) {
+            loadRedBull(RedBull.HOME, "Red Bull TV");
+            return;
+        }
         int which = Math.max(exploreService.getSelectedItemPosition(), 0);
         StreamingService service = exploreServices.get(which);
         exploreStatus.setText("Loading");
@@ -792,6 +796,10 @@ public final class MainActivity extends AppCompatActivity {
         return exploreService.getSelectedItemPosition() == exploreServices.size() + 9;
     }
 
+    private boolean redBullSelected() {
+        return exploreService.getSelectedItemPosition() == exploreServices.size() + 10;
+    }
+
     /** Popular, search, or a channel. The first page only. */
     private void loadChute(String url, String body, String label) {
         exploreStatus.setText("Loading");
@@ -858,6 +866,90 @@ public final class MainActivity extends AppCompatActivity {
                 .header("User-Agent", OkDownloader.USER_AGENT)
                 .header("Content-Type", "application/json")
                 .post(okhttp3.RequestBody.create(body, okhttp3.MediaType.parse("application/json")))
+                .build();
+        try (okhttp3.Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new java.io.IOException("HTTP " + response.code());
+            }
+            return response.body().string();
+        }
+    }
+
+    private void loadRedBull(String url, String label) {
+        exploreStatus.setText("Loading");
+        io.execute(() -> {
+            try {
+                List<Browse.Found> rows = new ArrayList<>();
+                for (RedBull.Clip clip : RedBull.feed(fetchRedBull(url))) {
+                    rows.add(new Browse.Found("video", clip.title, clip.page, "Red Bull TV", clip.thumb));
+                }
+                runOnUiThread(() -> {
+                    exploreSession = null;
+                    exploreBack = Collections.emptyList();
+                    showExplore(rows, label);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(message));
+            }
+        });
+    }
+
+    private void openRedBull(String page) {
+        showVideo();
+        exploreQuery.setText(page);
+        status.setText("Opening");
+        io.execute(() -> {
+            try {
+                String id = RedBull.id(page);
+                RedBull.Clip clip = RedBull.player(fetchRedBull(RedBull.playerUrl(id)));
+                if (clip.media.isEmpty()) {
+                    throw new java.io.IOException("no video");
+                }
+                java.util.ArrayList<Shelf.TrackIn> tracks = new java.util.ArrayList<>();
+                for (RedBull.Caption caption : clip.captions) {
+                    try {
+                        Cues.Transcript transcript = Cues.parse(fetchRedBull(caption.url), "vtt", false);
+                        if (!transcript.spans.isEmpty()) {
+                            tracks.add(new Shelf.TrackIn(caption.lang, "manual", "captions", transcript));
+                        }
+                    } catch (Exception ignored) {
+                        // A missing caption file still leaves the video playable.
+                    }
+                }
+                long saved = Shelf.save(
+                        db, "Red Bull TV", "redbull", "Red Bull TV", "https://www.redbull.com/",
+                        id, blank(clip.title, "Red Bull TV"), blank(clip.page, page),
+                        clip.media, tracks);
+                Shelf.setThumb(db, saved, clip.thumb);
+                Shelf.Video video = Shelf.video(db, saved);
+                String note = tracks.isEmpty()
+                        ? "No transcript. Keep, then Recognize."
+                        : tracks.size() + " caption track" + (tracks.size() == 1 ? "" : "s");
+                runOnUiThread(() -> {
+                    if (videoId != saved) {
+                        show(video, false);
+                    }
+                    play(clip.media, 0);
+                    status.setText(note);
+                });
+            } catch (Exception e) {
+                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> status.setText(message));
+            }
+        });
+    }
+
+    private static String fetchRedBull(String url) throws java.io.IOException {
+        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", Nico.UA)
+                .header("Accept", "application/json,application/vnd.apple.mpegurl,text/vtt,*/*")
+                .header("Referer", "https://www.redbull.com/")
                 .build();
         try (okhttp3.Response response = client.newCall(request).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
@@ -1912,6 +2004,7 @@ public final class MainActivity extends AppCompatActivity {
         names.add("Internet Archive");
         names.add("TED");
         names.add("NASA+");
+        names.add("Red Bull TV");
         exploreService.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
@@ -2049,6 +2142,14 @@ public final class MainActivity extends AppCompatActivity {
                 }
                 if (nasaSelected() && !typed.contains("://")) {
                     loadNasa(Nasa.searchUrl(typed), "NASA+");
+                    return;
+                }
+                if (RedBull.id(typed) != null) {
+                    runOnUiThread(() -> openRedBull(typed));
+                    return;
+                }
+                if (redBullSelected() && !typed.contains("://")) {
+                    loadRedBull(RedBull.searchUrl(typed), "Red Bull TV");
                     return;
                 }
                 int serviceAt = which < exploreServices.size() ? which : 0;
@@ -2268,6 +2369,10 @@ public final class MainActivity extends AppCompatActivity {
             openNasa(item.url);
             return;
         }
+        if (RedBull.id(item.url) != null) {
+            openRedBull(item.url);
+            return;
+        }
         if ("video".equals(item.kind)) {
             openVideo(item.url);
             return;
@@ -2318,7 +2423,8 @@ public final class MainActivity extends AppCompatActivity {
                 : which == exploreServices.size() + 5 ? "Odysee"
                 : which == exploreServices.size() + 6 ? "FOSDEM"
                 : which == exploreServices.size() + 7 ? "Internet Archive"
-                : which == exploreServices.size() + 8 ? "TED" : "NASA+";
+                : which == exploreServices.size() + 8 ? "TED"
+                : which == exploreServices.size() + 9 ? "NASA+" : "Red Bull TV";
         Shelf.bookmark(db, item.kind, service, item.url, item.name);
         exploreStatus.setText("Bookmarked");
     }
@@ -2491,7 +2597,7 @@ public final class MainActivity extends AppCompatActivity {
             status.setText("This stream has one quality");
             return;
         }
-        if (Nasa.slug(pageUrl) != null) {
+        if (RedBull.id(pageUrl) != null || Nasa.slug(pageUrl) != null) {
             status.setText("This stream has one quality");
             return;
         }
@@ -2857,6 +2963,10 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (Nasa.slug(page) != null && playUrl != null && playUrl.contains(".m3u8")) {
+            play(playUrl, t0);
+            return;
+        }
+        if (RedBull.id(page) != null && playUrl != null && playUrl.contains("play.redbull.com")) {
             play(playUrl, t0);
             return;
         }

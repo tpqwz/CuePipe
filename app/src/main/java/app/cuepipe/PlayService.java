@@ -222,6 +222,9 @@ public final class PlayService extends Service {
             if (host.contains("rumble.cloud")) {
                 inner.setRequestProperty("Referer", "https://rumble.com/");
             }
+            if (host.contains("play.redbull.com")) {
+                inner.setRequestProperty("Referer", "https://www.redbull.com/");
+            }
             if (host.contains("nasaplus.akamaized.net")) {
                 inner.setRequestProperty("Referer", "https://plus.nasa.gov/");
             }
