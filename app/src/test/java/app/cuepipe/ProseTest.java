@@ -50,6 +50,47 @@ public final class ProseTest {
     }
 
     @Test
+    public void thePlayheadMarksOneWordInsideTheLine() {
+        String text = "the cat sat";
+        assertEquals("the", text.substring(Prose.wordAt(text, 0, 900, 0)[0], Prose.wordAt(text, 0, 900, 0)[1]));
+        int[] mid = Prose.wordAt(text, 0, 900, 450);
+        assertEquals("cat", text.substring(mid[0], mid[1]));
+        int[] last = Prose.wordAt(text, 0, 900, 800);
+        assertEquals("sat", text.substring(last[0], last[1]));
+        assertEquals(-1, Prose.wordAt(text, 100, 200, 0)[0]);
+    }
+
+    @Test
+    public void aParagraphMarksTheWordAndKeepsItAcrossTheGap() {
+        List<Cues.Span> spans = Arrays.asList(
+                new Cues.Span(0, 600, 0, 1, "the cat sat"),
+                new Cues.Span(1000, 1600, 1, 1, "on the mat"));
+        List<Prose.Block> blocks = Prose.blocks(spans);
+        String text = blocks.get(0).text;
+        int[] first = Prose.wordAt(spans, blocks, 0, 0);
+        assertEquals("The", text.substring(first[0], first[1]));
+        int[] held = Prose.wordAt(spans, blocks, 0, 800);
+        assertEquals("sat", text.substring(held[0], held[1]));
+        int[] next = Prose.wordAt(spans, blocks, 0, 1000);
+        assertEquals("on", text.substring(next[0], next[1]));
+    }
+
+    @Test
+    public void chineseMarksOneCharacter() {
+        String text = "你好";
+        int[] first = Prose.wordAt(text, 0, 1000, 0);
+        assertEquals("你", text.substring(first[0], first[1]));
+        int[] second = Prose.wordAt(text, 0, 1000, 500);
+        assertEquals("好", text.substring(second[0], second[1]));
+        List<Cues.Span> spans = Arrays.asList(
+                new Cues.Span(0, 800, 0, 1, "你好"),
+                new Cues.Span(800, 1600, 1, 1, "世界"));
+        List<Prose.Block> blocks = Prose.blocks(spans);
+        int[] joined = Prose.wordAt(spans, blocks, 0, 800);
+        assertEquals("世", blocks.get(0).text.substring(joined[0], joined[1]));
+    }
+
+    @Test
     public void theOtherLanguageSitsUnderTheSameParagraph() {
         List<Cues.Span> spanish = Arrays.asList(
                 new Cues.Span(0, 800, 0, 1, "el gato"),

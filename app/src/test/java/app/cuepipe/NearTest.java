@@ -47,9 +47,9 @@ public final class NearTest {
 
     @Test
     public void blendKeepsACloseLineTheWordsMissed() {
-        Shelf.Hit lexical = new Shelf.Hit(1, 2, 10, "title", "channel", "words");
-        Shelf.Hit close = new Shelf.Hit(1, 3, 0, "title", "channel", "nearby idea");
-        Shelf.Hit far = new Shelf.Hit(1, 4, 0, "title", "channel", "unrelated");
+        Shelf.Hit lexical = new Shelf.Hit(1, 2, 10, "title", "channel", "words", 0);
+        Shelf.Hit close = new Shelf.Hit(1, 3, 0, "title", "channel", "nearby idea", 0);
+        Shelf.Hit far = new Shelf.Hit(1, 4, 0, "title", "channel", "unrelated", 0);
         List<Shelf.Hit> hits = Near.blend(
                 Arrays.asList(lexical),
                 Arrays.asList(new Near.Scored(close, 0.9f), new Near.Scored(far, 0.1f)));

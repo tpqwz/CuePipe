@@ -92,6 +92,10 @@ public final class MainActivity extends AppCompatActivity {
     private View lineSearch;
     private List<Browse.Found> related = Collections.emptyList();
     private List<Shelf.Video> shelfVideos = Collections.emptyList();
+    /** Shelf rows. A line with a null video is the channel heading. */
+    private List<ShelfLine> shelfLines = Collections.emptyList();
+    /** When set, the shelf shows this channel only. */
+    private String shelfChannel = "";
     private List<Shelf.Hit> hits = Collections.emptyList();
     private CheckBox onScreen;
     private ListView lines;
@@ -104,9 +108,13 @@ public final class MainActivity extends AppCompatActivity {
     private List<List<Cues.Span>> extras = Collections.emptyList();
     private boolean followLines = true;
     private int followed = -1;
+    private int markStart = -1;
+    private int markEnd = -1;
     private boolean triedFresh;
     private boolean prose;
     private boolean excerptMode;
+    /** Concepts was on for the hits now listed, so a synonym can be marked. */
+    private boolean hitConcepts;
     private float speed = 1f;
     /** -1 keeps the usual stream. 0 is audio only. 360 and 720 pick a picture. */
     private int qualityHeight = -1;
@@ -299,6 +307,7 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.drawer_library).setOnClickListener(v -> {
             closeDrawer();
             excerptMode = false;
+            shelfChannel = "";
             showTab(1);
             reloadLibrary();
         });
@@ -423,8 +432,12 @@ public final class MainActivity extends AppCompatActivity {
             reloadLibrary();
         }
         fillExploreServices();
-        showTab(0);
-        loadFeed();
+        if (Shelf.latest(db) != null) {
+            showTab(1);
+        } else {
+            showTab(0);
+            loadFeed();
+        }
     }
 
     private void loadFeed() {
@@ -1183,7 +1196,8 @@ public final class MainActivity extends AppCompatActivity {
         io.execute(() -> {
             try {
                 String id = Archive.identifier(page);
-                Archive.Item item = Archive.item(fetchArchive(Archive.metadataUrl(id)), qualityHeight);
+                String metaBody = fetchArchive(Archive.metadataUrl(id));
+                Archive.Item item = Archive.item(metaBody, qualityHeight);
                 if (item.media.isEmpty()) {
                     throw new java.io.IOException("no video");
                 }
@@ -2035,6 +2049,10 @@ public final class MainActivity extends AppCompatActivity {
             loadFeed();
             return;
         }
+        if (Archive.identifier(query) != null) {
+            openArchive(query, 0);
+            return;
+        }
         exploreStatus.setText("Searching");
         String typed = query;
         int which = Math.max(exploreService.getSelectedItemPosition(), 0);
@@ -2118,10 +2136,6 @@ public final class MainActivity extends AppCompatActivity {
                 }
                 if (fosdemSelected() && !typed.contains("://")) {
                     loadFosdem(Fosdem.searchUrl(typed), "FOSDEM");
-                    return;
-                }
-                if (Archive.identifier(typed) != null) {
-                    runOnUiThread(() -> openArchive(typed, 0));
                     return;
                 }
                 if (archiveSelected() && !typed.contains("://")) {
@@ -3121,10 +3135,19 @@ public final class MainActivity extends AppCompatActivity {
             }
             return;
         }
-        if (position < 0 || position >= shelfVideos.size()) {
+        if (position < 0 || position >= shelfLines.size()) {
             return;
         }
-        show(shelfVideos.get(position));
+        ShelfLine line = shelfLines.get(position);
+        if (line.video == null) {
+            if (line.channel == null || line.channel.isEmpty()) {
+                return;
+            }
+            shelfChannel = line.channel.equals(shelfChannel) ? "" : line.channel;
+            reloadLibrary();
+            return;
+        }
+        show(line.video);
         showVideo();
     }
 
@@ -3182,6 +3205,7 @@ public final class MainActivity extends AppCompatActivity {
             }
             hits = all;
             libraryHits = true;
+            hitConcepts = false;
             libraryStatus.setText(hits.size() + " excerpts");
             library.setAdapter(new LibraryAdapter());
             return;
@@ -3190,6 +3214,7 @@ public final class MainActivity extends AppCompatActivity {
             boolean fuzzy = ((android.widget.CheckBox) findViewById(R.id.fuzzy)).isChecked();
             boolean concepts = ((android.widget.CheckBox) findViewById(R.id.concepts)).isChecked();
             boolean meaning = ((android.widget.CheckBox) findViewById(R.id.meaning)).isChecked();
+            hitConcepts = concepts;
             if (meaning) {
                 searchMeaning(query, fuzzy, concepts, service);
                 return;
@@ -3205,10 +3230,38 @@ public final class MainActivity extends AppCompatActivity {
             }
         } else {
             libraryHits = false;
-            shelfVideos = Shelf.list(db, sort, service);
-            libraryStatus.setText(shelfVideos.size() + " videos");
+            shelfVideos = Shelf.gathered(Shelf.list(db, sort, service));
+            if (!shelfChannel.isEmpty()) {
+                List<Shelf.Video> narrowed = Shelf.onlyChannel(shelfVideos, shelfChannel);
+                if (narrowed.isEmpty()) {
+                    shelfChannel = "";
+                } else {
+                    shelfVideos = narrowed;
+                }
+            }
+            shelfLines = shelfLines(shelfVideos);
+            String label = shelfVideos.size() + " videos";
+            if (!shelfChannel.isEmpty()) {
+                label = shelfChannel + " · " + label;
+            }
+            libraryStatus.setText(label);
         }
         library.setAdapter(new LibraryAdapter());
+    }
+
+    /** A channel heading, then that channel's videos, in shelf order. */
+    private static List<ShelfLine> shelfLines(List<Shelf.Video> videos) {
+        List<ShelfLine> lines = new ArrayList<>();
+        String previous = null;
+        for (Shelf.Video video : videos) {
+            String name = video.channel == null ? "" : video.channel;
+            if (!name.equals(previous)) {
+                lines.add(new ShelfLine(name));
+                previous = name;
+            }
+            lines.add(new ShelfLine(video));
+        }
+        return lines;
     }
 
     /** Word hits plus paragraph vectors. The model is fetched the first time this runs. */
@@ -3250,9 +3303,11 @@ public final class MainActivity extends AppCompatActivity {
                         }
                         String quote = paragraph.text.length() > 180
                                 ? paragraph.text.substring(0, 180) : paragraph.text;
+                        int t0 = paragraph.spanIndex >= 0 && paragraph.spanIndex < rowSpans.size()
+                                ? rowSpans.get(paragraph.spanIndex).t0 : -1;
                         scored.add(new Near.Scored(new Shelf.Hit(
                                 video.id, trackId, paragraph.byteOffset,
-                                video.title, video.channel, quote), Near.cosine(asked, vector)));
+                                video.title, video.channel, quote, t0), Near.cosine(asked, vector)));
                     }
                     done++;
                     int shown = done;
@@ -3569,8 +3624,10 @@ public final class MainActivity extends AppCompatActivity {
         }
         this.extras = extras;
         blocks = prose ? Prose.blocks(spans) : Collections.emptyList();
-        lines.setAdapter(new LineAdapter(spans, extras, blocks));
         followed = -1;
+        markStart = -1;
+        markEnd = -1;
+        lines.setAdapter(new LineAdapter(spans, extras, blocks));
         followTranscript();
         paintOnScreen();
     }
@@ -3596,12 +3653,21 @@ public final class MainActivity extends AppCompatActivity {
             }
             return;
         }
-        String text = Cues.captionAt(spans, extras, cueClock());
+        int time = cueClock();
+        String text = Cues.captionAt(spans, extras, time);
         if (text.isEmpty()) {
             burn.setVisibility(View.GONE);
             return;
         }
-        burn.setText(text);
+        int[] range = {-1, -1};
+        int at = Cues.indexAt(spans, time);
+        if (at >= 0) {
+            Cues.Span span = spans.get(at);
+            if (time >= span.t0 && time < span.t1 && span.text != null && text.startsWith(span.text)) {
+                range = Prose.wordAt(span.text, span.t0, span.t1, time);
+            }
+        }
+        setMarked(burn, text, range[0], range[1]);
         burn.setVisibility(View.VISIBLE);
     }
 
@@ -3615,10 +3681,21 @@ public final class MainActivity extends AppCompatActivity {
         if (at < 0) {
             return;
         }
+        int[] word = wordRange(at);
         boolean moved = at != followed;
+        boolean wordMoved = moved || word[0] != markStart || word[1] != markEnd;
+        int previous = followed;
+        followed = at;
+        markStart = word[0];
+        markEnd = word[1];
         if (moved) {
-            followed = at;
             lines.setItemChecked(at, true);
+            if (previous >= 0) {
+                paintRow(previous);
+            }
+        }
+        if (wordMoved) {
+            paintRow(at);
         }
         if (!followLines || !moved) {
             return;
@@ -3628,6 +3705,65 @@ public final class MainActivity extends AppCompatActivity {
         if (first < 0 || at < first || at >= last) {
             lines.setSelectionFromTop(at, Math.max(lines.getHeight() / 5, 0));
         }
+    }
+
+    /** Range of the current word in the row's text. A line includes the stamp. */
+    private int[] wordRange(int at) {
+        int time = cueClock();
+        if (prose) {
+            return Prose.wordAt(spans, blocks, at, time);
+        }
+        Cues.Span span = spans.get(at);
+        int[] range = Prose.wordAt(span.text == null ? "" : span.text, span.t0, span.t1, time);
+        if (range[0] < 0) {
+            return range;
+        }
+        int pad = (stamp(span.t0) + "  ").length();
+        return new int[] {range[0] + pad, range[1] + pad};
+    }
+
+    private void paintRow(int position) {
+        int child = position - lines.getFirstVisiblePosition();
+        if (child < 0 || child >= lines.getChildCount()) {
+            return;
+        }
+        View row = lines.getChildAt(child);
+        android.widget.ListAdapter adapter = lines.getAdapter();
+        if (row != null && adapter != null) {
+            adapter.getView(position, row, lines);
+        }
+    }
+
+    private void setMarked(TextView view, String text, int start, int end) {
+        if (text == null || start < 0 || end <= start || end > text.length()) {
+            view.setText(text);
+            return;
+        }
+        android.text.SpannableString marked = new android.text.SpannableString(text);
+        int flags = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE;
+        marked.setSpan(new android.text.style.ForegroundColorSpan(getColor(R.color.accent)), start, end, flags);
+        marked.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD), start, end, flags);
+        view.setText(marked);
+    }
+
+    private void setMarks(TextView view, String text, java.util.List<Query.Mark> marks) {
+        if (text == null || marks == null || marks.isEmpty()) {
+            view.setText(text);
+            return;
+        }
+        android.text.SpannableString marked = new android.text.SpannableString(text);
+        int flags = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE;
+        int accent = getColor(R.color.accent);
+        for (Query.Mark mark : marks) {
+            if (mark.start < 0 || mark.end > text.length() || mark.end <= mark.start) {
+                continue;
+            }
+            int color = mark.related ? 0xFF64B5F6 : accent;
+            marked.setSpan(new android.text.style.ForegroundColorSpan(color), mark.start, mark.end, flags);
+            marked.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                    mark.start, mark.end, flags);
+        }
+        view.setText(marked);
     }
 
     /** Track index for a slot. Slots after the first use position 0 as None. */
@@ -3958,12 +4094,12 @@ public final class MainActivity extends AppCompatActivity {
     private final class LibraryAdapter extends BaseAdapter {
         @Override
         public int getCount() {
-            return libraryHits ? hits.size() : shelfVideos.size();
+            return libraryHits ? hits.size() : shelfLines.size();
         }
 
         @Override
         public Object getItem(int position) {
-            return libraryHits ? hits.get(position) : shelfVideos.get(position);
+            return libraryHits ? hits.get(position) : shelfLines.get(position);
         }
 
         @Override
@@ -3978,19 +4114,51 @@ public final class MainActivity extends AppCompatActivity {
                     : convert;
             TextView heading = row.findViewById(R.id.lib_title);
             TextView meta = row.findViewById(R.id.lib_meta);
-            String thumbUrl = "";
+            android.widget.ImageView thumb = row.findViewById(R.id.thumb);
             if (libraryHits) {
                 Shelf.Hit hit = hits.get(position);
-                heading.setText(hit.quote);
-                meta.setText(hit.channel + " — " + hit.title);
-            } else {
-                Shelf.Video video = shelfVideos.get(position);
-                heading.setText(video.title);
-                meta.setText(video.channel);
-                thumbUrl = video.thumb;
+                String quote = hit.quote == null ? "" : hit.quote;
+                heading.setTypeface(null, android.graphics.Typeface.NORMAL);
+                setMarks(heading, quote, Query.marks(quote, libraryQuery.getText().toString(), hitConcepts));
+                String when = hit.t0 >= 0 ? stamp(hit.t0) + " — " : "";
+                meta.setText(when + hit.channel + " — " + hit.title);
+                meta.setVisibility(View.VISIBLE);
+                thumb.setVisibility(View.VISIBLE);
+                bindThumb(row, "");
+                return row;
             }
-            bindThumb(row, thumbUrl);
+            ShelfLine line = shelfLines.get(position);
+            if (line.video == null) {
+                heading.setTypeface(null, android.graphics.Typeface.BOLD);
+                heading.setText(line.channel);
+                meta.setVisibility(View.GONE);
+                thumb.setVisibility(View.GONE);
+                com.bumptech.glide.Glide.with(row).clear(thumb);
+                return row;
+            }
+            heading.setTypeface(null, android.graphics.Typeface.NORMAL);
+            heading.setText(line.video.title);
+            meta.setText(line.video.service);
+            meta.setVisibility(View.VISIBLE);
+            thumb.setVisibility(View.VISIBLE);
+            bindThumb(row, line.video.thumb);
             return row;
+        }
+    }
+
+    /** A shelf row. video is null on the channel heading. */
+    private static final class ShelfLine {
+        final String channel;
+        final Shelf.Video video;
+
+        ShelfLine(String channel) {
+            this.channel = channel;
+            this.video = null;
+        }
+
+        ShelfLine(Shelf.Video video) {
+            this.channel = video.channel;
+            this.video = video;
         }
     }
 
@@ -4033,9 +4201,13 @@ public final class MainActivity extends AppCompatActivity {
                 Prose.Block block = blocks.get(position);
                 first.setText(stamp(block.t0));
                 TextView body = row.findViewById(LINE_IDS[1]);
-                body.setText(block.text);
                 body.setTextAppearance(android.R.style.TextAppearance_Medium);
                 body.setVisibility(View.VISIBLE);
+                if (position == followed) {
+                    setMarked(body, block.text, markStart, markEnd);
+                } else {
+                    body.setText(block.text);
+                }
                 for (int i = 2; i < LINE_IDS.length; i++) {
                     TextView extra = row.findViewById(LINE_IDS[i]);
                     String text = "";
@@ -4049,7 +4221,12 @@ public final class MainActivity extends AppCompatActivity {
             }
             first.setTextAppearance(android.R.style.TextAppearance_Medium);
             Cues.Span span = primarySpans.get(position);
-            first.setText(stamp(span.t0) + "  " + span.text);
+            String line = stamp(span.t0) + "  " + span.text;
+            if (position == followed) {
+                setMarked(first, line, markStart, markEnd);
+            } else {
+                first.setText(line);
+            }
             for (int i = 1; i < LINE_IDS.length; i++) {
                 TextView view = row.findViewById(LINE_IDS[i]);
                 String text = "";

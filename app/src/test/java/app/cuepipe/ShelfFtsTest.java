@@ -68,6 +68,16 @@ public final class ShelfFtsTest {
         List<Shelf.Video> byTitle = Shelf.list(db, Shelf.SORT_TITLE, null);
         assertEquals("A talk", byTitle.get(0).title);
         assertEquals("Zebra hour", byTitle.get(1).title);
+        List<Shelf.Video> mixed = java.util.Arrays.asList(
+                new Shelf.Video(3, "New A", "Alpha", "", "", "YouTube"),
+                new Shelf.Video(2, "New B", "Beta", "", "", "YouTube"),
+                new Shelf.Video(1, "Old A", "Alpha", "", "", "YouTube"));
+        List<Shelf.Video> gathered = Shelf.gathered(mixed);
+        assertEquals("New A", gathered.get(0).title);
+        assertEquals("Old A", gathered.get(1).title);
+        assertEquals("New B", gathered.get(2).title);
+        assertEquals(2, Shelf.onlyChannel(gathered, "Alpha").size());
+        assertEquals(0, Shelf.onlyChannel(gathered, "").size());
         assertEquals(1, Shelf.list(db, Shelf.SORT_NEWEST, "YouTube").size());
         List<Shelf.Hit> hits = Shelf.searchAll(db, db, "zebra");
         assertEquals(1, hits.size());

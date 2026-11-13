@@ -103,6 +103,121 @@ public final class Prose {
         return at;
     }
 
+    /**
+     * Character range of the word under timeMs, or {@code {-1,-1}}.
+     * The cue's time is shared across its words by length. A CJK character
+     * is its own word. Before the cue, nothing is marked.
+     */
+    public static int[] wordAt(String text, int t0, int t1, int timeMs) {
+        if (text == null || text.isEmpty() || timeMs < t0) {
+            return NONE;
+        }
+        return pick(wordsIn(text, 0, text.length(), t0, Math.max(t1, t0 + 1)), timeMs);
+    }
+
+    /**
+     * The same range inside the paragraph text. A gap between cues keeps the
+     * word just played. Indexes match {@link Block#text}.
+     */
+    public static int[] wordAt(List<Cues.Span> spans, List<Block> blocks, int blockIndex, int timeMs) {
+        if (spans == null || blocks == null || blockIndex < 0 || blockIndex >= blocks.size()) {
+            return NONE;
+        }
+        Block block = blocks.get(blockIndex);
+        int to = blockIndex + 1 < blocks.size()
+                ? blocks.get(blockIndex + 1).spanIndex : spans.size();
+        StringBuilder out = new StringBuilder();
+        List<int[]> words = new ArrayList<>();
+        for (int i = block.spanIndex; i < to && i < spans.size(); i++) {
+            Cues.Span span = spans.get(i);
+            String cue = span.text == null ? "" : span.text.trim();
+            if (cue.isEmpty()) {
+                continue;
+            }
+            int cueStart;
+            if (out.length() == 0) {
+                out.append(capitalize(cue));
+                cueStart = 0;
+            } else {
+                boolean cjk = endsCjk(out) && startsCjk(cue);
+                if (!cjk && !endsSentence(out) && startsSentence(cue)) {
+                    out.append('.');
+                }
+                if (!cjk) {
+                    out.append(' ');
+                }
+                cueStart = out.length();
+                out.append(cue);
+            }
+            words.addAll(wordsIn(out, cueStart, out.length(), span.t0, Math.max(span.t1, span.t0 + 1)));
+        }
+        return pick(words, timeMs);
+    }
+
+    private static final int[] NONE = {-1, -1};
+
+    /** Words in [from, to). Each entry is start, end, t0, t1. */
+    private static List<int[]> wordsIn(CharSequence text, int from, int to, int t0, int t1) {
+        List<int[]> local = new ArrayList<>();
+        int i = from;
+        while (i < to) {
+            int cp = Character.codePointAt(text, i);
+            if (Character.isWhitespace(cp)) {
+                i += Character.charCount(cp);
+                continue;
+            }
+            int start = i;
+            if (isCjk(cp)) {
+                i += Character.charCount(cp);
+            } else {
+                while (i < to) {
+                    int next = Character.codePointAt(text, i);
+                    if (Character.isWhitespace(next) || isCjk(next)) {
+                        break;
+                    }
+                    i += Character.charCount(next);
+                }
+            }
+            local.add(new int[] {start, i, Math.max(i - start, 1)});
+        }
+        List<int[]> out = new ArrayList<>();
+        int total = 0;
+        for (int[] word : local) {
+            total += word[2];
+        }
+        if (total == 0) {
+            return out;
+        }
+        int cursor = t0;
+        int consumed = 0;
+        for (int w = 0; w < local.size(); w++) {
+            consumed += local.get(w)[2];
+            int endTime = w == local.size() - 1
+                    ? t1 : t0 + (int) ((long) (t1 - t0) * consumed / total);
+            out.add(new int[] {local.get(w)[0], local.get(w)[1], cursor, endTime});
+            cursor = endTime;
+        }
+        return out;
+    }
+
+    /** The word that contains timeMs, or the latest word already started. */
+    private static int[] pick(List<int[]> words, int timeMs) {
+        int[] hold = null;
+        for (int[] word : words) {
+            if (timeMs < word[2]) {
+                break;
+            }
+            hold = word;
+            if (timeMs < word[3]) {
+                return new int[] {word[0], word[1]};
+            }
+        }
+        if (hold == null) {
+            return NONE;
+        }
+        return new int[] {hold[0], hold[1]};
+    }
+
     static String join(List<String> cues) {
         StringBuilder out = new StringBuilder();
         for (String raw : cues) {

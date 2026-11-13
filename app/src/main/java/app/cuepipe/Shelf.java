@@ -7,7 +7,9 @@ import android.database.sqlite.SQLiteOpenHelper;
 import android.database.sqlite.SQLiteStatement;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * One shelf. The transcript body lives in docs. fts is FTS4 external content
@@ -363,15 +365,18 @@ public final class Shelf {
         public final String title;
         public final String channel;
         public final String quote;
+        /** Cue time in milliseconds, or -1 when the hit has no time. */
+        public final int t0;
 
         public Hit(long videoId, long trackId, int byteOffset, String title, String channel,
-                   String quote) {
+                   String quote, int t0) {
             this.videoId = videoId;
             this.trackId = trackId;
             this.byteOffset = byteOffset;
             this.title = title;
             this.channel = channel;
             this.quote = quote;
+            this.t0 = t0;
         }
     }
 
@@ -395,6 +400,45 @@ public final class Shelf {
         for (String[] row : raw) {
             out.add(new Video(
                     Long.parseLong(row[0]), row[1], row[2], row[4], row[5], row[3], row[6]));
+        }
+        return out;
+    }
+
+    /**
+     * One run of videos per channel. The channel keeps the order of its videos,
+     * and channels stay in the order they first appear.
+     */
+    public static List<Video> gathered(List<Video> videos) {
+        List<Video> out = new ArrayList<>();
+        if (videos == null) {
+            return out;
+        }
+        Map<String, List<Video>> buckets = new LinkedHashMap<>();
+        for (Video video : videos) {
+            String key = video.channel == null ? "" : video.channel;
+            List<Video> group = buckets.get(key);
+            if (group == null) {
+                group = new ArrayList<>();
+                buckets.put(key, group);
+            }
+            group.add(video);
+        }
+        for (List<Video> group : buckets.values()) {
+            out.addAll(group);
+        }
+        return out;
+    }
+
+    /** Videos whose channel name is exactly {@code name}. */
+    public static List<Video> onlyChannel(List<Video> videos, String name) {
+        List<Video> out = new ArrayList<>();
+        if (videos == null || name == null || name.isEmpty()) {
+            return out;
+        }
+        for (Video video : videos) {
+            if (name.equals(video.channel)) {
+                out.add(video);
+            }
         }
         return out;
     }
@@ -462,9 +506,9 @@ public final class Shelf {
                     }
                     seen[at] = true;
                     hits.add(new Hit(video.id, trackId, offset, video.title, video.channel,
-                            spans.get(at).text));
+                            spans.get(at).text, spans.get(at).t0));
                 } else {
-                    hits.add(new Hit(video.id, trackId, offset, video.title, video.channel, ""));
+                    hits.add(new Hit(video.id, trackId, offset, video.title, video.channel, "", -1));
                 }
             }
         }
@@ -522,7 +566,7 @@ public final class Shelf {
     public static List<Hit> excerpts(SqlRows rows) {
         List<Hit> hits = new ArrayList<>();
         for (String[] row : rows.rows(
-                "SELECT video_id, track_id, byte_offset, title, channel, text "
+                "SELECT video_id, track_id, byte_offset, title, channel, text, t0_ms "
                         + "FROM excerpt ORDER BY id DESC")) {
             hits.add(new Hit(
                     Long.parseLong(row[0]),
@@ -530,7 +574,8 @@ public final class Shelf {
                     Integer.parseInt(row[2]),
                     row[3],
                     row[4],
-                    row[5]));
+                    row[5],
+                    Integer.parseInt(row[6])));
         }
         return hits;
     }
