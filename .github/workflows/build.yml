@@ -31,11 +31,17 @@ jobs:
           echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$HOME/android-sdk/platform-tools" >> "$GITHUB_PATH"
+          # The runner image sets ANDROID_SDK_ROOT to its own SDK. Packages and
+          # Gradle must use this tree only.
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
           yes | "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "platform-tools" "ndk;28.2.13676358" "cmake;3.22.1"
 
       - name: Test and build the debug APK
-        run: ./gradlew :app:test :app:assembleDebug --stacktrace
+        run: |
+          unset ANDROID_SDK_ROOT
+          ./gradlew :app:test :app:assembleDebug --stacktrace
 
       - name: Upload CuePipe.apk
         uses: actions/upload-artifact@v4
