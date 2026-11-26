@@ -14,7 +14,7 @@ Install only on the connected Pixel over wireless adb. Rediscover the port with 
 
 Run a long or noisy shell command through `rtk` when it is on `PATH` (`~/.cargo/bin/rtk`). Prefer `/usr/bin/python3`, `/usr/bin/gcc`, and `/usr/bin/ffmpeg`. The `python3`, `ffmpeg`, and `clang` names on `PATH` can be shims. For a second pass on a diff, a parser, or a failing test, ask `qwen2.5-coder:14b` at `http://127.0.0.1:11434`. There is no `qwen` binary on `PATH`. When context-mode is connected, use it for a count, a filter, or a search over a long file or a long log.
 
-Commit when the user asks. Push only when the user asks. Debug keystore APKs only. GitHub Actions (`.github/workflows/build.yml`) installs command line tools, platform android-35, build-tools 35, NDK `28.2.13676358`, and CMake 3.22.1 into `ANDROID_HOME`. The runner image's `ANDROID_SDK_ROOT` is unset for Gradle, because two different SDK paths fail the build. The artifact name is `CuePipe`. Claim a CI run is green only after checking it.
+Commit when the user asks. Push only when the user asks. Debug keystore APKs only. GitHub Actions (`.github/workflows/build.yml`) installs command line tools, platform android-35, build-tools 35, NDK `28.2.13676358`, and CMake 3.22.1 into `ANDROID_HOME`. The runner image's `ANDROID_SDK_ROOT` is unset for Gradle, because two different SDK paths fail the build. The artifact name is `CuePipe`. A push to `master` also publishes a release tagged `v` plus `versionName` and attaches the APK, so the file is on the Releases page. A prerelease is not used, because GitHub hides those from the latest release. Claim a CI run is green only after checking it.
 
 ## Build
 
