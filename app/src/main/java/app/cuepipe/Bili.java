@@ -235,6 +235,73 @@ public final class Bili {
     }
 
     /**
+     * The CDN that hosts {@code upgcxcode}. An open-ended range is 403 there.
+     * A closed range through the last byte is 206.
+     */
+    static boolean cdnHost(String host, String path) {
+        if (host == null) {
+            return false;
+        }
+        if (host.contains("bilivideo") || host.contains("hdslb")) {
+            return true;
+        }
+        return host.contains("akamaized") && path != null && path.contains("upgcxcode");
+    }
+
+    /** {@code bytes 0-1/59552563} is 59552563. Unknown or {@code *} is -1. */
+    static long documentSize(String contentRange) {
+        if (contentRange == null) {
+            return -1;
+        }
+        int slash = contentRange.lastIndexOf('/');
+        if (slash < 0 || slash + 1 >= contentRange.length()) {
+            return -1;
+        }
+        String tail = contentRange.substring(slash + 1).trim();
+        if (tail.isEmpty() || "*".equals(tail)) {
+            return -1;
+        }
+        try {
+            long size = Long.parseLong(tail);
+            return size > 0 ? size : -1;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * Closes an open range on the last byte. A range that already has an end stays.
+     * {@code null} is a request for the whole file. A start at or past {@code size} stays open.
+     */
+    static String closedRange(String range, long size) {
+        if (size <= 0) {
+            return range;
+        }
+        long start = 0;
+        if (range != null) {
+            if (!range.startsWith("bytes=")) {
+                return range;
+            }
+            int dash = range.indexOf('-', "bytes=".length());
+            if (dash < 0) {
+                return range;
+            }
+            if (dash + 1 < range.length()) {
+                return range;
+            }
+            try {
+                start = Long.parseLong(range.substring("bytes=".length(), dash));
+            } catch (NumberFormatException e) {
+                return range;
+            }
+        }
+        if (start >= size) {
+            return range;
+        }
+        return "bytes=" + start + "-" + (size - 1);
+    }
+
+    /**
      * Picks a picture near {@code targetHeight} and an audio file.
      * A negative target means 720. Zero means audio only.
      * shortcut: bilivideo.com returned 403 from this network; akamaized returned the file.

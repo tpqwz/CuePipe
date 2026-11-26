@@ -135,6 +135,122 @@ public final class Near {
         return out;
     }
 
+    /**
+     * SentencePiece unigram. Pieces keep the metaspace mark. Ids are the
+     * tokenizer's, with {@code bos} and {@code eos} wrapped around them.
+     */
+    public static final class Unigram {
+        final Map<String, Integer> ids;
+        final Map<String, Float> scores;
+        final int unk;
+        final int bos;
+        final int eos;
+        final int maxChars;
+
+        public Unigram(Map<String, Integer> ids, Map<String, Float> scores,
+                       int unk, int bos, int eos) {
+            this.ids = ids;
+            this.scores = scores;
+            this.unk = unk;
+            this.bos = bos;
+            this.eos = eos;
+            int max = 1;
+            for (String piece : ids.keySet()) {
+                if (piece.length() > max) {
+                    max = piece.length();
+                }
+            }
+            this.maxChars = max;
+        }
+    }
+
+    /** Caps at maxLen, including the leading and trailing specials. */
+    public static int[] encode(Unigram model, String text, int maxLen) {
+        List<Integer> pieces = segment(model, metaspace(text));
+        List<Integer> ids = new ArrayList<>();
+        ids.add(model.bos);
+        int room = Math.max(maxLen, 2);
+        for (int id : pieces) {
+            if (ids.size() + 1 >= room) {
+                break;
+            }
+            ids.add(id);
+        }
+        ids.add(model.eos);
+        int[] out = new int[ids.size()];
+        for (int i = 0; i < ids.size(); i++) {
+            out[i] = ids.get(i);
+        }
+        return out;
+    }
+
+    static String metaspace(String text) {
+        String norm = java.text.Normalizer.normalize(text == null ? "" : text, java.text.Normalizer.Form.NFKC);
+        norm = norm.trim().replaceAll("\\s+", " ");
+        if (norm.isEmpty()) {
+            return "";
+        }
+        return "▁" + norm.replace(" ", "▁");
+    }
+
+    private static List<Integer> segment(Unigram model, String text) {
+        List<Integer> ids = new ArrayList<>();
+        if (text.isEmpty()) {
+            return ids;
+        }
+        int n = text.length();
+        double[] best = new double[n + 1];
+        int[] from = new int[n + 1];
+        int[] pick = new int[n + 1];
+        java.util.Arrays.fill(best, Double.NEGATIVE_INFINITY);
+        best[0] = 0;
+        for (int i = 0; i < n; i++) {
+            if (best[i] == Double.NEGATIVE_INFINITY) {
+                continue;
+            }
+            int end = Math.min(n, i + model.maxChars);
+            boolean matched = false;
+            for (int j = i + 1; j <= end; j++) {
+                String piece = text.substring(i, j);
+                Float score = model.scores.get(piece);
+                if (score == null) {
+                    continue;
+                }
+                matched = true;
+                double total = best[i] + score;
+                if (total > best[j]) {
+                    best[j] = total;
+                    from[j] = i;
+                    pick[j] = model.ids.get(piece);
+                }
+            }
+            if (matched) {
+                continue;
+            }
+            int next = i + Character.charCount(text.codePointAt(i));
+            double total = best[i] - 20;
+            if (total > best[next]) {
+                best[next] = total;
+                from[next] = i;
+                pick[next] = model.unk;
+            }
+        }
+        int cursor = n;
+        List<Integer> backward = new ArrayList<>();
+        while (cursor > 0) {
+            backward.add(pick[cursor]);
+            int prior = from[cursor];
+            if (prior >= cursor) {
+                break;
+            }
+            cursor = prior;
+        }
+        for (int i = backward.size() - 1; i >= 0; i--) {
+            ids.add(backward.get(i));
+        }
+        return ids;
+    }
+
     static List<String> basic(String text) {
         String lower = text.toLowerCase(Locale.ROOT);
         List<String> out = new ArrayList<>();

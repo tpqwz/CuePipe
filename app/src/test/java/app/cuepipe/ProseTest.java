@@ -50,6 +50,26 @@ public final class ProseTest {
     }
 
     @Test
+    public void thePlayheadUnderlinesTheClause() {
+        String text = "Schools kill creativity. They train children to be afraid, and that fear stays.";
+        int[] sentence = Prose.phraseAround(text, 0, "Schools".length());
+        assertEquals("Schools kill creativity.", text.substring(sentence[0], sentence[1]));
+        int afraid = text.indexOf("afraid");
+        int[] clause = Prose.phraseAround(text, afraid, afraid + "afraid".length());
+        assertEquals("They train children to be afraid,", text.substring(clause[0], clause[1]));
+        int fear = text.indexOf("fear");
+        int[] rest = Prose.phraseAround(text, fear, fear + "fear".length());
+        assertEquals("and that fear stays.", text.substring(rest[0], rest[1]));
+        String cjk = "你好，世界。";
+        int[] hello = Prose.phraseAround(cjk, 0, 1);
+        assertEquals("你好，", cjk.substring(hello[0], hello[1]));
+        int world = cjk.indexOf("世");
+        int[] second = Prose.phraseAround(cjk, world, world + 1);
+        assertEquals("世界。", cjk.substring(second[0], second[1]));
+        assertEquals(-1, Prose.phraseAround(text, -1, 2)[0]);
+    }
+
+    @Test
     public void thePlayheadMarksOneWordInsideTheLine() {
         String text = "the cat sat";
         assertEquals("the", text.substring(Prose.wordAt(text, 0, 900, 0)[0], Prose.wordAt(text, 0, 900, 0)[1]));

@@ -72,8 +72,16 @@ public final class Cues {
             kind = sniff(raw);
         }
         List<Cue> cues;
-        if (raw.startsWith("{") || raw.contains("\"tStartMs\"")) {
+        if (raw.contains("\"segments\"") && raw.contains("\"startTime\"")) {
+            cues = segments(raw);
+        } else if (raw.contains("\"chapters\"") && raw.contains("\"startTime\"")) {
+            cues = chapters(raw);
+        } else if (raw.startsWith("{") || raw.contains("\"tStartMs\"")) {
             cues = json3(raw);
+        } else if ("html".equals(kind) || (raw.contains("<cite") && raw.contains("<time"))) {
+            cues = htmlTranscript(raw);
+        } else if ("txt".equals(kind) || "plain".equals(kind) || "text".equals(kind)) {
+            cues = plain(raw);
         } else if ("vtt".equals(kind)) {
             cues = timed(raw);
         } else if ("srt".equals(kind)) {
@@ -283,6 +291,217 @@ public final class Cues {
         return out;
     }
 
+    /** One JSON object that contains a startTime, from its opening brace. */
+    private static List<String> timedSlices(String raw) {
+        List<String> out = new ArrayList<>();
+        int from = 0;
+        while (from < raw.length()) {
+            int at = raw.indexOf("\"startTime\"", from);
+            if (at < 0) {
+                break;
+            }
+            int open = raw.lastIndexOf('{', at);
+            if (open < 0) {
+                open = at;
+            }
+            int next = raw.indexOf("\"startTime\"", at + 11);
+            int end = raw.length();
+            if (next >= 0) {
+                int nextOpen = raw.lastIndexOf('{', next);
+                end = nextOpen > open ? nextOpen : next;
+            }
+            out.add(raw.substring(open, end));
+            from = at + 11;
+        }
+        return out;
+    }
+
+    /**
+     * Podcast 2.0 HTML. A cite, a clock, and a paragraph.
+     * shortcut: the last monologue runs four hours, because the file has no end.
+     */
+    private static List<Cue> htmlTranscript(String raw) {
+        String lower = raw.toLowerCase(Locale.US);
+        List<Cue> found = new ArrayList<>();
+        int from = 0;
+        while (from < lower.length()) {
+            int timeAt = lower.indexOf("<time", from);
+            if (timeAt < 0) {
+                break;
+            }
+            int citeAt = lower.lastIndexOf("<cite", timeAt);
+            String speaker = citeAt >= from ? tagText(raw, lower, citeAt, "cite") : "";
+            int t0 = clock(tagText(raw, lower, timeAt, "time"));
+            int pAt = lower.indexOf("<p", timeAt);
+            String body = pAt < 0 ? "" : tagText(raw, lower, pAt, "p");
+            String text = clean(speaker.isEmpty() ? body : speaker + " " + body);
+            if (t0 >= 0 && !text.isEmpty()) {
+                found.add(new Cue(t0, t0, text));
+            }
+            from = pAt < 0 ? timeAt + 5 : pAt + 2;
+        }
+        if (found.isEmpty()) {
+            String all = clean(raw);
+            if (!all.isEmpty()) {
+                found.add(new Cue(0, 4 * 60 * 60 * 1000, all));
+            }
+            return found;
+        }
+        List<Cue> out = new ArrayList<>();
+        for (int n = 0; n < found.size(); n++) {
+            Cue cue = found.get(n);
+            int t1 = n + 1 < found.size() ? found.get(n + 1).t0 : cue.t0 + 4 * 60 * 60 * 1000;
+            out.add(new Cue(cue.t0, Math.max(t1, cue.t0), cue.text));
+        }
+        return out;
+    }
+
+    private static String tagText(String raw, String lower, int tagAt, String name) {
+        int gt = raw.indexOf('>', tagAt);
+        if (gt < 0) {
+            return "";
+        }
+        int end = lower.indexOf("</" + name, gt);
+        if (end < 0) {
+            return "";
+        }
+        return raw.substring(gt + 1, end);
+    }
+
+    /**
+     * A plain transcript. Timestamped lines keep their clock. A file with no
+     * clock is one cue.
+     * shortcut: an untimed file runs four hours, because it has no end.
+     */
+    private static List<Cue> plain(String raw) {
+        if (raw.contains("-->") || raw.startsWith("WEBVTT")) {
+            return timed(raw);
+        }
+        List<Cue> stamped = new ArrayList<>();
+        StringBuilder text = new StringBuilder();
+        int t0 = -1;
+        for (String line : raw.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
+            String trimmed = line.trim();
+            int split = stampSplit(trimmed);
+            if (split > 0) {
+                if (t0 >= 0) {
+                    addPlain(stamped, t0, text.toString());
+                }
+                t0 = clock(trimmed.substring(0, split).replace("[", "").replace("]", ""));
+                text = new StringBuilder(trimmed.substring(split).trim());
+                continue;
+            }
+            if (t0 < 0) {
+                continue;
+            }
+            if (text.length() > 0) {
+                text.append(' ');
+            }
+            text.append(trimmed);
+        }
+        if (t0 >= 0) {
+            addPlain(stamped, t0, text.toString());
+        }
+        if (!stamped.isEmpty()) {
+            return closeCues(stamped);
+        }
+        String all = clean(raw);
+        if (all.isEmpty()) {
+            return stamped;
+        }
+        stamped.add(new Cue(0, 4 * 60 * 60 * 1000, all));
+        return stamped;
+    }
+
+    /** Index after a leading clock, or -1. Brackets around the clock are allowed. */
+    private static int stampSplit(String line) {
+        if (line.isEmpty()) {
+            return -1;
+        }
+        int start = line.charAt(0) == '[' ? 1 : 0;
+        int i = start;
+        int colons = 0;
+        while (i < line.length()) {
+            char c = line.charAt(i);
+            if (c == ':') {
+                colons++;
+                i++;
+                continue;
+            }
+            if (Character.isDigit(c) || c == '.' || c == ',') {
+                i++;
+                continue;
+            }
+            break;
+        }
+        if (colons < 1 || i == start) {
+            return -1;
+        }
+        int end = i;
+        if (start == 1 && end < line.length() && line.charAt(end) == ']') {
+            end++;
+        }
+        if (clock(line.substring(start, i)) < 0) {
+            return -1;
+        }
+        return end;
+    }
+
+    private static void addPlain(List<Cue> out, int t0, String text) {
+        String clean = clean(text);
+        if (t0 >= 0 && !clean.isEmpty()) {
+            out.add(new Cue(t0, t0, clean));
+        }
+    }
+
+    private static List<Cue> closeCues(List<Cue> found) {
+        List<Cue> out = new ArrayList<>();
+        for (int n = 0; n < found.size(); n++) {
+            Cue cue = found.get(n);
+            int t1 = n + 1 < found.size() ? found.get(n + 1).t0 : cue.t0 + 4 * 60 * 60 * 1000;
+            out.add(new Cue(cue.t0, Math.max(t1, cue.t0), cue.text));
+        }
+        return out;
+    }
+
+    /** Podcast 2.0 transcript. startTime and endTime are seconds. */
+    private static List<Cue> segments(String raw) {
+        List<Cue> out = new ArrayList<>();
+        for (String slice : timedSlices(raw)) {
+            int t0 = jsonMillis(slice, "startTime");
+            int t1 = jsonMillis(slice, "endTime");
+            String body = jsonField(slice, "body");
+            String speaker = jsonField(slice, "speaker");
+            String text = clean(speaker.isEmpty() ? body : speaker + ": " + body);
+            if (t0 >= 0 && !text.isEmpty()) {
+                out.add(new Cue(t0, t1 < t0 ? t0 : t1, text));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Podcast 2.0 chapters. Each title runs until the next start.
+     * shortcut: the last chapter runs four hours, because the file has no end.
+     */
+    private static List<Cue> chapters(String raw) {
+        List<Cue> found = new ArrayList<>();
+        for (String slice : timedSlices(raw)) {
+            int t0 = jsonMillis(slice, "startTime");
+            String title = clean(jsonField(slice, "title"));
+            if (t0 >= 0 && !title.isEmpty()) {
+                found.add(new Cue(t0, t0, title));
+            }
+        }
+        List<Cue> out = new ArrayList<>();
+        for (int n = 0; n < found.size(); n++) {
+            Cue cue = found.get(n);
+            int t1 = n + 1 < found.size() ? found.get(n + 1).t0 : cue.t0 + 4 * 60 * 60 * 1000;
+            out.add(new Cue(cue.t0, Math.max(t1, cue.t0), cue.text));
+        }
+        return out;
+    }
+
     private static List<Cue> json3(String raw) {
         List<Cue> out = new ArrayList<>();
         int i = 0;
@@ -302,6 +521,68 @@ public final class Cues {
             i = at + 10;
         }
         return out;
+    }
+
+    /** A JSON number of seconds, as milliseconds. Missing is -1. */
+    private static int jsonMillis(String slice, String key) {
+        int at = slice.indexOf("\"" + key + "\"");
+        if (at < 0) {
+            return -1;
+        }
+        int colon = slice.indexOf(':', at);
+        if (colon < 0) {
+            return -1;
+        }
+        int j = colon + 1;
+        while (j < slice.length() && Character.isWhitespace(slice.charAt(j))) {
+            j++;
+        }
+        int k = j;
+        boolean dot = false;
+        while (k < slice.length()) {
+            char c = slice.charAt(k);
+            if (Character.isDigit(c)) {
+                k++;
+                continue;
+            }
+            if (c == '.' && !dot) {
+                dot = true;
+                k++;
+                continue;
+            }
+            break;
+        }
+        if (k == j || (dot && k == j + 1)) {
+            return -1;
+        }
+        try {
+            double seconds = Double.parseDouble(slice.substring(j, k));
+            if (seconds < 0) {
+                return -1;
+            }
+            return (int) Math.round(seconds * 1000.0);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private static String jsonField(String slice, String key) {
+        int at = slice.indexOf("\"" + key + "\"");
+        if (at < 0) {
+            return "";
+        }
+        int colon = slice.indexOf(':', at);
+        if (colon < 0) {
+            return "";
+        }
+        int q = colon + 1;
+        while (q < slice.length() && Character.isWhitespace(slice.charAt(q))) {
+            q++;
+        }
+        if (q >= slice.length() || slice.charAt(q) != '"') {
+            return "";
+        }
+        return jsonString(slice, q);
     }
 
     private static int jsonNum(String slice, String key) {
@@ -546,7 +827,8 @@ public final class Cues {
     }
 
     private static String clean(String s) {
-        String t = s.replaceAll("<[^>]+>", " ");
+        String t = s.replaceAll("<v(?:\\.[^\\s>]+)?\\s+([^>]+)>", "$1: ");
+        t = t.replaceAll("<[^>]+>", " ");
         t = t.replace("&nbsp;", " ")
                 .replace("&amp;", "&")
                 .replace("&lt;", "<")

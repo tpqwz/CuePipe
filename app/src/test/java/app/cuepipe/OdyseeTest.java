@@ -15,6 +15,10 @@ public final class OdyseeTest {
                 Odysee.videoUri("https://odysee.com/@Chan:ab/video:cd"));
         assertEquals("ef", Odysee.channelId("https://odysee.com/@Chan:ef"));
         assertNull(Odysee.videoUri("https://odysee.com/@Chan:ef"));
+        assertNull(Odysee.videoUri(
+                "https://fosdem.org/2026/schedule/event/FV3BZ9-closing_of_the_decentralized_internet_devroom/"));
+        assertEquals("lbry://@Chan#ab/video#cd",
+                Odysee.videoUri("https://www.odysee.com/@Chan:ab/video:cd"));
         assertNull(Odysee.channelId("https://odysee.com/@Chan:ab/video:cd"));
     }
 

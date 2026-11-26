@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class ShelfFtsTest {
@@ -76,8 +77,25 @@ public final class ShelfFtsTest {
         assertEquals("New A", gathered.get(0).title);
         assertEquals("Old A", gathered.get(1).title);
         assertEquals("New B", gathered.get(2).title);
+        assertEquals(-1, Shelf.keptPlace(1000, 60000));
+        assertEquals(8000, Shelf.keptPlace(8000, 60000));
+        assertEquals(0, Shelf.keptPlace(58000, 60000));
         assertEquals(2, Shelf.onlyChannel(gathered, "Alpha").size());
         assertEquals(0, Shelf.onlyChannel(gathered, "").size());
+        Cues.Transcript burned = Cues.parse(
+                "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nfirst ticker\n", "vtt", false);
+        Shelf.addTrack(db, id, new Shelf.TrackIn("zh", "ocr", "burned-in", burned));
+        Cues.Transcript againBurned = Cues.parse(
+                "WEBVTT\n\n00:00:00.000 --> 00:00:04.000\none steady ticker\n", "vtt", false);
+        Shelf.addTrack(db, id, new Shelf.TrackIn("zh", "ocr", "burned-in", againBurned));
+        int burnedTracks = 0;
+        for (Shelf.Track storedTrack : Shelf.readTracks(db, id)) {
+            if ("burned-in".equals(storedTrack.label)) {
+                burnedTracks++;
+                assertEquals("one steady ticker", Shelf.readSpans(db, storedTrack.id).get(0).text);
+            }
+        }
+        assertEquals(1, burnedTracks);
         assertEquals(1, Shelf.list(db, Shelf.SORT_NEWEST, "YouTube").size());
         List<Shelf.Hit> hits = Shelf.searchAll(db, db, "zebra");
         assertEquals(1, hits.size());
@@ -175,6 +193,30 @@ public final class ShelfFtsTest {
         Shelf.follow(db, "YouTube", "https://example.test/c", "Example", false);
         assertEquals(false, Shelf.followed(db, "https://example.test/c"));
         assertEquals(0, Shelf.checkRows(db).size());
+        c.close();
+    }
+
+    @Test
+    public void aFollowedFeedIsASubscriptionAndItsEpisodeIsKnown() throws Exception {
+        Connection c = DriverManager.getConnection("jdbc:sqlite::memory:");
+        JdbcSql db = new JdbcSql(c);
+        for (String sql : Shelf.SCHEMA) {
+            db.exec(sql);
+        }
+        Shelf.follow(db, "Podcast", "https://example.test/feed.xml", "Hard Enduro", true);
+        List<String[]> follows = Shelf.follows(db);
+        assertEquals(1, follows.size());
+        assertEquals("Podcast", follows.get(0)[1]);
+        assertEquals("https://example.test/feed.xml", follows.get(0)[2]);
+        assertEquals(1, Shelf.checkRows(db).size());
+        Shelf.save(db, "Podcast", "https://example.test/feed.xml", "Hard Enduro",
+                "https://example.test/feed.xml", "https://example.test/one.mp3",
+                "One", "https://example.test/one", "https://example.test/one.mp3",
+                java.util.List.of());
+        assertTrue(Shelf.known(db, "https://example.test/one.mp3"));
+        assertTrue(Shelf.known(db, "https://example.test/one"));
+        assertFalse(Shelf.known(db, "https://example.test/two.mp3"));
+        assertFalse(Shelf.known(db, ""));
         c.close();
     }
 

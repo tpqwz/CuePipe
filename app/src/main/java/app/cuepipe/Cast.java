@@ -13,10 +13,10 @@ import javax.xml.parsers.DocumentBuilderFactory;
 
 /**
  * A podcast RSS feed. Podcast 2.0 transcripts are caption files on an episode.
- * shortcut: only the first 40 episodes are kept.
+ * The screen shows {@link #PAGE} episodes at a time.
  */
 public final class Cast {
-    private static final int LIMIT = 40;
+    public static final int PAGE = 40;
 
     public static final class Caption {
         public final String url;
@@ -35,12 +35,15 @@ public final class Cast {
         public final String page;
         public final String audio;
         public final List<Caption> captions;
+        public final String chapters;
 
-        public Episode(String title, String page, String audio, List<Caption> captions) {
+        public Episode(String title, String page, String audio, List<Caption> captions,
+                       String chapters) {
             this.title = title == null ? "" : title;
             this.page = page == null ? "" : page;
             this.audio = audio == null ? "" : audio;
             this.captions = captions;
+            this.chapters = chapters == null ? "" : chapters;
         }
     }
 
@@ -54,33 +57,39 @@ public final class Cast {
         }
     }
 
+    /** A blog or news item. It has a link and may have no audio. */
+    public static final class Post {
+        public final String title;
+        public final String url;
+
+        public Post(String title, String url) {
+            this.title = title == null ? "" : title;
+            this.url = url == null ? "" : url;
+        }
+    }
+
     private Cast() {
     }
 
     public static Show parse(String xml) throws Exception {
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        factory.setNamespaceAware(true);
-        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-        Element root = factory.newDocumentBuilder()
-                .parse(new InputSource(new StringReader(xml)))
-                .getDocumentElement();
-        Element channel = first(root, "channel");
-        Element scope = channel == null ? root : channel;
+        Element scope = scope(xml);
         String title = text(first(scope, "title"));
         List<Episode> episodes = new ArrayList<>();
         NodeList nodes = scope.getChildNodes();
-        for (int i = 0; i < nodes.getLength() && episodes.size() < LIMIT; i++) {
-            if (!local(nodes.item(i)).equals("item")) {
+        for (int i = 0; i < nodes.getLength(); i++) {
+            String kind = local(nodes.item(i));
+            if (!kind.equals("item") && !kind.equals("entry")) {
                 continue;
             }
             Element item = (Element) nodes.item(i);
             String audio = attr(first(item, "enclosure"), "url");
             if (audio.isEmpty()) {
+                audio = alternateAudio(item);
+            }
+            if (audio.isEmpty()) {
                 continue;
             }
-            String link = text(first(item, "link"));
+            String link = linkOf(item);
             String guid = text(first(item, "guid"));
             String page = !link.isEmpty() ? link : (guid.startsWith("http") ? guid : audio);
             List<Caption> captions = new ArrayList<>();
@@ -90,9 +99,152 @@ public final class Cast {
                     captions.add(new Caption(url, attr(transcript, "type"), attr(transcript, "language")));
                 }
             }
-            episodes.add(new Episode(text(first(item, "title")), page, audio, captions));
+            String chapters = "";
+            for (Element chapter : named(item, "chapters")) {
+                String url = attr(chapter, "url");
+                if (!url.isEmpty()) {
+                    chapters = url;
+                    break;
+                }
+            }
+            episodes.add(new Episode(text(first(item, "title")), page, audio, captions, chapters));
         }
         return new Show(title, episodes);
+    }
+
+    public static String feedTitle(String xml) throws Exception {
+        String title = text(first(scope(xml), "title"));
+        return title;
+    }
+
+    /** Every item with a link, including ones that have no enclosure. */
+    public static List<Post> posts(String xml) throws Exception {
+        Element scope = scope(xml);
+        List<Post> posts = new ArrayList<>();
+        NodeList nodes = scope.getChildNodes();
+        for (int i = 0; i < nodes.getLength(); i++) {
+            String kind = local(nodes.item(i));
+            if (!kind.equals("item") && !kind.equals("entry")) {
+                continue;
+            }
+            Element item = (Element) nodes.item(i);
+            String url = linkOf(item);
+            if (url.isEmpty()) {
+                String guid = text(first(item, "guid"));
+                url = guid.startsWith("http") ? guid : "";
+            }
+            if (url.isEmpty()) {
+                continue;
+            }
+            String title = text(first(item, "title"));
+            posts.add(new Post(title.isEmpty() ? url : title, url));
+        }
+        return posts;
+    }
+
+    /** One note that holds every followed feed. Each row is service, name, url. */
+    public static String opml(List<String[]> feeds) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        sb.append("<opml version=\"2.0\"><head><title>CuePipe</title></head><body>\n");
+        for (String[] feed : feeds) {
+            if (feed == null || feed.length < 3 || feed[2] == null || feed[2].isEmpty()) {
+                continue;
+            }
+            sb.append("<outline type=\"").append(xml(feed[0]))
+                    .append("\" text=\"").append(xml(feed[1]))
+                    .append("\" xmlUrl=\"").append(xml(feed[2])).append("\"/>\n");
+        }
+        sb.append("</body></opml>\n");
+        return sb.toString();
+    }
+
+    /** Feeds named in an OPML note. Each row is service, name, url. */
+    public static List<String[]> outlines(String xml) throws Exception {
+        List<String[]> out = new ArrayList<>();
+        walkOutlines(root(xml), out);
+        return out;
+    }
+
+    private static void walkOutlines(Element el, List<String[]> out) {
+        if ("outline".equals(local(el))) {
+            String url = attr(el, "xmlUrl");
+            if (url.isEmpty()) {
+                url = attr(el, "url");
+            }
+            if (!url.isEmpty()) {
+                String type = attr(el, "type").toLowerCase(java.util.Locale.ROOT);
+                String service = type.contains("podcast") ? "Podcast" : "RSS";
+                String name = attr(el, "text");
+                if (name.isEmpty()) {
+                    name = attr(el, "title");
+                }
+                out.add(new String[] {service, name.isEmpty() ? url : name, url});
+            }
+        }
+        NodeList nodes = el.getChildNodes();
+        for (int i = 0; i < nodes.getLength(); i++) {
+            if (nodes.item(i) instanceof Element) {
+                walkOutlines((Element) nodes.item(i), out);
+            }
+        }
+    }
+
+    private static String xml(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace("\"", "&quot;");
+    }
+
+    private static Element root(String xml) throws Exception {
+        if (xml != null && xml.toLowerCase(java.util.Locale.ROOT).contains("<!doctype")) {
+            throw new IllegalArgumentException("This feed is not a podcast");
+        }
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        factory.setExpandEntityReferences(false);
+        // Android's parser throws if the Apache doctype feature is set.
+        try {
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        } catch (javax.xml.parsers.ParserConfigurationException ignored) {
+        }
+        try {
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        } catch (javax.xml.parsers.ParserConfigurationException ignored) {
+        }
+        return factory.newDocumentBuilder()
+                .parse(new InputSource(new StringReader(xml == null ? "" : xml)))
+                .getDocumentElement();
+    }
+
+    private static Element scope(String xml) throws Exception {
+        Element root = root(xml);
+        Element channel = first(root, "channel");
+        return channel == null ? root : channel;
+    }
+
+    private static String linkOf(Element item) {
+        String link = text(first(item, "link"));
+        if (!link.isEmpty()) {
+            return link;
+        }
+        return attr(first(item, "link"), "href");
+    }
+
+    /** The first podcast:alternateEnclosure source, when the item has no enclosure. */
+    private static String alternateAudio(Element item) {
+        for (Element enclosure : named(item, "alternateEnclosure")) {
+            for (Element source : named(enclosure, "source")) {
+                String uri = attr(source, "uri");
+                if (!uri.isEmpty()) {
+                    return uri;
+                }
+            }
+        }
+        return "";
     }
 
     private static List<Element> named(Element parent, String want) {

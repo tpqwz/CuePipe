@@ -503,6 +503,22 @@
             android:text="@string/tab_home" />
 
         <Button
+            android:id="@+id/drawer_rss"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="start|center_vertical"
+            android:text="@string/tab_rss" />
+
+        <Button
+            android:id="@+id/drawer_podcasts"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="start|center_vertical"
+            android:text="@string/tab_podcasts" />
+
+        <Button
             android:id="@+id/drawer_library"
             style="?attr/borderlessButtonStyle"
             android:layout_width="match_parent"

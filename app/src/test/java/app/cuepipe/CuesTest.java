@@ -59,6 +59,61 @@ public final class CuesTest {
     }
 
     @Test
+    public void podcastJsonReadsSegmentsAndChapters() {
+        String segments = "{\"version\":\"1.0.0\",\"segments\":["
+                + "{\"speaker\":\"Ada\",\"startTime\":1.5,\"endTime\":4.25,\"body\":\"Hello there\"},"
+                + "{\"startTime\":5,\"endTime\":6.5,\"body\":\"Next line\"}]}";
+        Cues.Transcript spoken = Cues.parse(segments, "json", false);
+        assertEquals(2, spoken.spans.size());
+        assertEquals("Ada: Hello there", spoken.spans.get(0).text);
+        assertEquals(1500, spoken.spans.get(0).t0);
+        assertEquals(4250, spoken.spans.get(0).t1);
+        assertEquals("Next line", spoken.spans.get(1).text);
+        assertEquals(5000, spoken.spans.get(1).t0);
+        String chapters = "{\"chapters\":["
+                + "{\"startTime\":0,\"title\":\"Intro\"},"
+                + "{\"startTime\":12.5,\"title\":\"The work\"}]}";
+        Cues.Transcript marks = Cues.parse(chapters, "json", false);
+        assertEquals(2, marks.spans.size());
+        assertEquals("Intro", marks.spans.get(0).text);
+        assertEquals(0, marks.spans.get(0).t0);
+        assertEquals(12500, marks.spans.get(0).t1);
+        assertEquals(12500, marks.spans.get(1).t0);
+    }
+
+    @Test
+    public void plainTextAndVoiceTags() {
+        String plain = "0:00 Ada starts\nstill talking\n[00:01:02] Next part\n";
+        Cues.Transcript stamped = Cues.parse(plain, "txt", false);
+        assertEquals(2, stamped.spans.size());
+        assertEquals("Ada starts still talking", stamped.spans.get(0).text);
+        assertEquals(0, stamped.spans.get(0).t0);
+        assertEquals(62000, stamped.spans.get(0).t1);
+        assertEquals("Next part", stamped.spans.get(1).text);
+        String whole = Cues.parse("Just the words.\nMore words.", "txt", false).spans.get(0).text;
+        assertEquals("Just the words. More words.", whole);
+        String vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\n<v Ada>Hello there\n";
+        assertEquals("Ada: Hello there", Cues.parse(vtt, "vtt", false).spans.get(0).text);
+    }
+
+    @Test
+    public void htmlTranscriptReadsCiteTimeAndParagraph() {
+        String html = "<cite>Ada:</cite><time>0:00</time><p>Hello there</p>"
+                + "<cite>Bea:</cite><time>1:02</time><p>It&#39;s time</p>";
+        Cues.Transcript t = Cues.parse(html, "html", false);
+        assertEquals(2, t.spans.size());
+        assertEquals("Ada: Hello there", t.spans.get(0).text);
+        assertEquals(0, t.spans.get(0).t0);
+        assertEquals(62000, t.spans.get(0).t1);
+        assertEquals("Bea: It's time", t.spans.get(1).text);
+        String bare = "<p>No clock on this one.</p>";
+        Cues.Transcript loose = Cues.parse(bare, "html", false);
+        assertEquals("No clock on this one.", loose.spans.get(0).text);
+        assertEquals(0, loose.spans.get(0).t0);
+        assertEquals(62000, t.spans.get(1).t0);
+    }
+
+    @Test
     public void json3ReadsSegs() {
         String json = "{\"events\":["
                 + "{\"tStartMs\":80,\"dDurationMs\":1000,\"segs\":[{\"utf8\":\"ask not\"}]},"

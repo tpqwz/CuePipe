@@ -3,7 +3,9 @@ package app.cuepipe;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 
@@ -43,6 +45,35 @@ public final class NearTest {
         assertEquals(3, ids[ids.length - 1]);
         int[] broken = Near.encode(vocab, "zzzz", 16);
         assertEquals(1, broken[1]);
+    }
+
+    @Test
+    public void sentencePieceKeepsAWholeWordAndACharacter() {
+        Map<String, Integer> ids = new HashMap<>();
+        Map<String, Float> scores = new HashMap<>();
+        put(ids, scores, "▁hello", 4, -0.1f);
+        put(ids, scores, "▁world", 5, -0.2f);
+        put(ids, scores, "▁", 6, -2f);
+        put(ids, scores, "hello", 7, -1f);
+        put(ids, scores, "world", 8, -1f);
+        put(ids, scores, "你", 9, -0.3f);
+        put(ids, scores, "好", 10, -0.3f);
+        Near.Unigram model = new Near.Unigram(ids, scores, 3, 0, 2);
+        int[] english = Near.encode(model, "hello world", 16);
+        assertEquals(0, english[0]);
+        assertEquals(4, english[1]);
+        assertEquals(5, english[2]);
+        assertEquals(2, english[3]);
+        int[] chinese = Near.encode(model, "你好", 16);
+        assertEquals(6, chinese[1]);
+        assertEquals(9, chinese[2]);
+        assertEquals(10, chinese[3]);
+    }
+
+    private static void put(Map<String, Integer> ids, Map<String, Float> scores,
+                            String piece, int id, float score) {
+        ids.put(piece, id);
+        scores.put(piece, score);
     }
 
     @Test

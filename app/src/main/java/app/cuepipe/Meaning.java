@@ -9,9 +9,7 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.LongBuffer;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.function.IntConsumer;
 
@@ -24,19 +22,21 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 /**
- * English E5, fetched once into app files. The switch stays off until a search uses it.
- * shortcut: e5-small-v2 is English WordPiece. A multilingual model needs SentencePiece.
+ * Multilingual E5, fetched once into app files. The switch stays off until a search uses it.
+ * SentencePiece unigram, the XLM-R vocabulary. Prefixes stay {@code query: } and {@code passage: }.
  */
 public final class Meaning {
+    /** Mixed into a paragraph hash so an older English vector is not reused. */
+    public static final int SPACE = 0x4d354535;
     private static final String MODEL_URL =
-            "https://huggingface.co/Xenova/e5-small-v2/resolve/main/onnx/model_quantized.onnx";
+            "https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx";
     private static final String VOCAB_URL =
-            "https://huggingface.co/Xenova/e5-small-v2/resolve/main/vocab.txt";
+            "https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/tokenizer.json";
     private static final int MAX_TOKENS = 128;
 
     private static OrtEnvironment environment;
     private static OrtSession session;
-    private static Near.Vocab vocab;
+    private static Near.Unigram pieces;
     private static boolean types;
 
     private Meaning() {
@@ -53,7 +53,7 @@ public final class Meaning {
     private static synchronized float[] embed(Context context, String text, IntConsumer progress)
             throws IOException {
         ensure(context, progress);
-        int[] ids = Near.encode(vocab, text, MAX_TOKENS);
+        int[] ids = Near.encode(pieces, text, MAX_TOKENS);
         long[] id64 = new long[ids.length];
         long[] mask = new long[ids.length];
         long[] type = new long[ids.length];
@@ -123,19 +123,12 @@ public final class Meaning {
     }
 
     private static void ensure(Context context, IntConsumer progress) throws IOException {
-        if (session != null && vocab != null) {
+        if (session != null && pieces != null) {
             return;
         }
-        File model = fetch(context, "e5-small-v2.onnx", MODEL_URL, 20_000_000, progress);
-        File words = fetch(context, "e5-vocab.txt", VOCAB_URL, 100_000, null);
-        List<String> lines = new ArrayList<>();
-        try (BufferedReader reader = new BufferedReader(new FileReader(words))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                lines.add(line);
-            }
-        }
-        vocab = Near.vocab(lines);
+        File model = fetch(context, "m-e5.onnx", MODEL_URL, 80_000_000, progress);
+        File words = fetch(context, "m-e5-tokenizer.json", VOCAB_URL, 8_000_000, null);
+        pieces = loadPieces(words);
         try {
             environment = OrtEnvironment.getEnvironment();
             OrtSession.SessionOptions options = new OrtSession.SessionOptions();
@@ -143,12 +136,42 @@ public final class Meaning {
             session = environment.createSession(model.getAbsolutePath(), options);
             options.close();
             types = session.getInputNames().contains("token_type_ids");
+            new File(context.getFilesDir(), "e5-small-v2.onnx").delete();
+            new File(context.getFilesDir(), "e5-vocab.txt").delete();
         } catch (OrtException e) {
             model.delete();
             session = null;
-            vocab = null;
+            pieces = null;
             throw new IOException(e.getMessage(), e);
         }
+    }
+
+    private static Near.Unigram loadPieces(File words) throws IOException {
+        StringBuilder raw = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new FileReader(words))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                raw.append(line);
+            }
+        }
+        org.json.JSONArray vocab;
+        try {
+            vocab = new org.json.JSONObject(raw.toString()).getJSONObject("model").getJSONArray("vocab");
+        } catch (org.json.JSONException e) {
+            words.delete();
+            throw new IOException("tokenizer");
+        }
+        Map<String, Integer> ids = new HashMap<>();
+        Map<String, Float> scores = new HashMap<>();
+        for (int i = 0; i < vocab.length(); i++) {
+            org.json.JSONArray pair = vocab.optJSONArray(i);
+            if (pair == null || pair.length() < 2) {
+                continue;
+            }
+            ids.put(pair.optString(0), i);
+            scores.put(pair.optString(0), (float) pair.optDouble(1));
+        }
+        return new Near.Unigram(ids, scores, 3, 0, 2);
     }
 
     private static File fetch(Context context, String name, String url, long minBytes, IntConsumer progress)

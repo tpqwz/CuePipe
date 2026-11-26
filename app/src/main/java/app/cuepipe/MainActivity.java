@@ -45,7 +45,9 @@ import org.schabi.newpipe.extractor.stream.VideoStream;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -110,6 +112,8 @@ public final class MainActivity extends AppCompatActivity {
     private int followed = -1;
     private int markStart = -1;
     private int markEnd = -1;
+    /** Last place written for the open video, so the tick does not rewrite it. */
+    private int remembered = -1;
     private boolean triedFresh;
     private boolean prose;
     private boolean excerptMode;
@@ -123,12 +127,27 @@ public final class MainActivity extends AppCompatActivity {
     private boolean mini;
     private List<Prose.Block> blocks = Collections.emptyList();
     private List<Cast.Episode> episodes = Collections.emptyList();
+    /** The open feed, paged by {@link Cast#PAGE}. Empty when the list is not that feed. */
+    private List<Cast.Episode> feedEpisodes = Collections.emptyList();
+    private int feedAt;
+    private String feedLabel = "";
+    /** Link cards from an RSS feed, paged like episodes. */
+    private List<Browse.Found> linkRows = Collections.emptyList();
+    private int linkAt;
+    private String linkLabel = "";
+    /** The search field lists links instead of episodes. */
+    private boolean rssPanel;
+    /** More shares the saved feeds instead of turning a page. */
+    private boolean shareCollection;
+    /** Enclosure URL to the feed it came from. */
+    private final Map<String, String> feedOf = new HashMap<>();
     private final Runnable playTick = new Runnable() {
         @Override
         public void run() {
             paintOnScreen();
             followTranscript();
             paintLine();
+            rememberPlace();
             if (videoOpen && player.isPlaying()) {
                 lines.postDelayed(this, 250);
             }
@@ -142,6 +161,10 @@ public final class MainActivity extends AppCompatActivity {
         shelf = new Shelf(this);
         db = shelf.sql();
         title = findViewById(R.id.title);
+        title.setOnLongClickListener(v -> {
+            shareWatching();
+            return true;
+        });
         status = findViewById(R.id.status);
         lines = findViewById(R.id.lines);
         library = findViewById(R.id.library);
@@ -202,6 +225,9 @@ public final class MainActivity extends AppCompatActivity {
             public void onIsPlayingChanged(boolean isPlaying) {
                 lines.removeCallbacks(playTick);
                 playTick.run();
+                if (!isPlaying) {
+                    rememberPlace();
+                }
             }
 
             @Override
@@ -228,7 +254,7 @@ public final class MainActivity extends AppCompatActivity {
                     jump(at);
                     return;
                 }
-                status.setText("This source is not available");
+                status.setText(playFailure(error));
             }
         });
 
@@ -300,9 +326,18 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.follow).setOnClickListener(v -> toggleFollow());
         findViewById(R.id.drawer_home).setOnClickListener(v -> {
             closeDrawer();
+            rssPanel = false;
             fillExploreServices();
             showTab(0);
             loadFeed();
+        });
+        findViewById(R.id.drawer_rss).setOnClickListener(v -> {
+            closeDrawer();
+            showSavedFeeds("RSS");
+        });
+        findViewById(R.id.drawer_podcasts).setOnClickListener(v -> {
+            closeDrawer();
+            showSavedFeeds("Podcast");
         });
         findViewById(R.id.drawer_library).setOnClickListener(v -> {
             closeDrawer();
@@ -384,6 +419,17 @@ public final class MainActivity extends AppCompatActivity {
         });
         exploreList.setOnItemClickListener((parent, view, position, id) -> openExplore(position));
         exploreList.setOnItemLongClickListener((parent, view, position, id) -> {
+            if (position >= 0 && position < exploreRows.size()) {
+                Browse.Found item = exploreRows.get(position);
+                if ("link".equals(item.kind)) {
+                    shareText(item.name, item.name + "\n" + item.url);
+                    return true;
+                }
+                if ("episode".equals(item.kind)) {
+                    shareEpisode(item);
+                    return true;
+                }
+            }
             toggleBookmark(position);
             return true;
         });
@@ -457,7 +503,7 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (rumbleSelected()) {
-            exploreStatus.setText("Paste a Rumble link. The feed is blocked here.");
+            noteFeed("Paste a Rumble link. The feed is blocked here.");
             return;
         }
         if (kickSelected()) {
@@ -518,7 +564,7 @@ public final class MainActivity extends AppCompatActivity {
                 }
             }
             String message = last.getClass().getSimpleName() + ": " + last.getMessage();
-            runOnUiThread(() -> exploreStatus.setText(message));
+            noteFeed(message);
         });
     }
 
@@ -567,16 +613,22 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void burned() {
-        String local = Shelf.prefer(Shelf.localPath(db, videoId), "");
-        if (local.isEmpty()) {
-            status.setText("Keep the video first, then read the burned-in line");
-            return;
-        }
-        status.setText("Reading burned-in lines");
-        String path = local;
+        String kept = Shelf.prefer(Shelf.localPath(db, videoId), "");
+        status.setText(kept.isEmpty()
+                ? "Reading, not keeping the file" : "Reading burned-in lines");
+        String page = pageUrl;
+        String playing = playUrl;
         long id = videoId;
         io.execute(() -> {
+            java.io.File borrowed = null;
             try {
+                String path = kept;
+                if (path.isEmpty()) {
+                    String source = readSource(page, playing, true);
+                    borrowed = scratch(id, ".burn.mp4");
+                    download(source, borrowed, "Reading");
+                    path = borrowed.getAbsolutePath();
+                }
                 Cues.Transcript transcript = Burned.read(path, fraction -> runOnUiThread(
                         () -> status.setText("Burned-in " + fraction + "%")));
                 if (transcript.spans.isEmpty()) {
@@ -588,23 +640,34 @@ public final class MainActivity extends AppCompatActivity {
             } catch (Exception e) {
                 String message = e.getClass().getSimpleName() + ": " + e.getMessage();
                 runOnUiThread(() -> status.setText(message));
+            } finally {
+                if (borrowed != null) {
+                    borrowed.delete();
+                }
             }
         });
     }
 
     private void recognize() {
-        String local = Shelf.prefer(Shelf.localPath(db, videoId), "");
-        if (local.isEmpty()) {
-            status.setText("Keep the video first, then recognize speech");
-            return;
-        }
-        status.setText("Recognizing");
-        String path = local;
+        String kept = Shelf.prefer(Shelf.localPath(db, videoId), "");
+        status.setText(kept.isEmpty()
+                ? "Recognizing, not keeping the file" : "Recognizing");
         String page = pageUrl;
+        String playing = playUrl;
         long id = videoId;
         io.execute(() -> {
             java.io.File side = null;
+            java.io.File borrowed = null;
             try {
+                String path = kept;
+                if (path.isEmpty()) {
+                    String source = readSource(page, playing, false);
+                    String ext = source.contains(".mp3") ? ".mp3"
+                            : source.contains(".mp4") ? ".mp4" : ".m4a";
+                    borrowed = scratch(id, ".speech" + ext);
+                    download(source, borrowed, "Reading");
+                    path = borrowed.getAbsolutePath();
+                }
                 float[] samples;
                 try {
                     samples = Pcm.decode16kMono(path);
@@ -649,8 +712,50 @@ public final class MainActivity extends AppCompatActivity {
                 if (side != null) {
                     side.delete();
                 }
+                if (borrowed != null) {
+                    borrowed.delete();
+                }
             }
         });
+    }
+
+    /**
+     * A stream to read once. Picture prefers a file with frames. Speech prefers
+     * audio. The caller deletes the download and does not set {@code local_path}.
+     */
+    private String readSource(String page, String playing, boolean picture) throws java.io.IOException {
+        try {
+            NewPipe.getServiceByUrl(page);
+            StreamInfo info = StreamInfo.getInfo(page);
+            if (!picture) {
+                String audio = audioUrl(info);
+                if (!audio.isEmpty()) {
+                    return audio;
+                }
+            }
+            int height = picture && qualityHeight == 0 ? 360 : qualityHeight;
+            String file = fileUrl(info, height);
+            if (file.isEmpty()) {
+                throw new java.io.IOException("no stream");
+            }
+            return file;
+        } catch (java.io.IOException e) {
+            throw e;
+        } catch (Exception notAService) {
+            if (!picture && page != null && Bili.bvid(page) != null) {
+                return biliAudio(page);
+            }
+            if (playing == null || playing.isEmpty() || playing.startsWith("/")
+                    || playing.contains(".m3u8")) {
+                throw new java.io.IOException(playing != null && playing.contains(".m3u8")
+                        ? "This stream is a playlist" : "no stream");
+            }
+            return playing;
+        }
+    }
+
+    private java.io.File scratch(long id, String suffix) {
+        return new java.io.File(getCacheDir(), id + suffix);
     }
 
     /** Downloads the episode file when the page is not a video service. */
@@ -682,6 +787,39 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    /** Timed captions outrank an HTML page, which outranks a plain file. */
+    private static int captionRank(Cast.Caption caption) {
+        String suffix = captionSuffix(caption);
+        if ("vtt".equals(suffix) || "srt".equals(suffix)) {
+            return 0;
+        }
+        if ("json".equals(suffix)) {
+            return 1;
+        }
+        if ("html".equals(suffix)) {
+            return 2;
+        }
+        return 3;
+    }
+
+    private static String captionSuffix(Cast.Caption caption) {
+        String type = caption.type.toLowerCase(Locale.US);
+        String link = caption.url.toLowerCase(Locale.US);
+        if (type.contains("json") || link.contains(".json")) {
+            return "json";
+        }
+        if (type.contains("html") || link.endsWith(".html") || link.endsWith(".htm")) {
+            return "html";
+        }
+        if (type.contains("srt") || link.contains(".srt")) {
+            return "srt";
+        }
+        if (type.contains("plain") || link.endsWith(".txt")) {
+            return "txt";
+        }
+        return "vtt";
+    }
+
     private static boolean looksLikeFeed(String url) {
         String lower = url.toLowerCase(Locale.ROOT);
         return lower.contains("rss") || lower.contains("feed") || lower.contains("podcast")
@@ -693,23 +831,75 @@ public final class MainActivity extends AppCompatActivity {
         try {
             String body = fetchText(url);
             if (!body.contains("<rss") && !body.contains("<feed")) {
+                noteFeed("This feed is not a podcast");
                 return false;
             }
             Cast.Show show = Cast.parse(body);
-            List<Browse.Found> rows = new ArrayList<>();
-            for (Cast.Episode episode : show.episodes) {
-                rows.add(new Browse.Found("episode", episode.title, episode.audio, show.title));
-            }
             String label = show.title.isEmpty() ? "Podcast" : show.title;
+            for (Cast.Episode episode : show.episodes) {
+                feedOf.put(episode.audio, url);
+            }
+            Shelf.follow(db, "Podcast", url, label, true);
             runOnUiThread(() -> {
-                episodes = show.episodes;
-                exploreSession = null;
-                showExplore(rows, label);
+                feedEpisodes = show.episodes;
+                feedAt = 0;
+                feedLabel = label;
+                showFeedPage();
             });
             return true;
         } catch (Exception e) {
+            noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             return false;
         }
+    }
+
+    /** Lists the links in a feed and remembers the feed under RSS. */
+    private boolean openRss(String url) {
+        try {
+            String body = fetchText(url);
+            if (!body.contains("<rss") && !body.contains("<feed")) {
+                noteFeed("This feed is not RSS");
+                return false;
+            }
+            List<Cast.Post> posts = Cast.posts(body);
+            if (posts.isEmpty()) {
+                noteFeed("No links in this feed");
+                return false;
+            }
+            String titled = Cast.feedTitle(body);
+            String shown = titled.isEmpty() ? "RSS" : titled;
+            List<Browse.Found> rows = new ArrayList<>();
+            for (Cast.Post post : posts) {
+                rows.add(new Browse.Found("link", post.title, post.url, shown));
+            }
+            Shelf.follow(db, "RSS", url, shown, true);
+            runOnUiThread(() -> {
+                linkRows = rows;
+                linkAt = 0;
+                linkLabel = shown;
+                showLinkPage();
+            });
+            return true;
+        } catch (Exception e) {
+            noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void showLinkPage() {
+        int end = Math.min(linkAt + Cast.PAGE, linkRows.size());
+        List<Browse.Found> page = linkAt >= end
+                ? Collections.emptyList()
+                : new ArrayList<>(linkRows.subList(linkAt, end));
+        feedEpisodes = Collections.emptyList();
+        exploreRows = page;
+        exploreSession = null;
+        episodes = Collections.emptyList();
+        armMore(false);
+        String more = end < linkRows.size() ? " · more" : "";
+        exploreStatus.setText(linkLabel + " · " + page.size() + more);
+        exploreList.setAdapter(new ExploreAdapter());
+        showTab(0);
     }
 
     private void openEpisode(String audio) {
@@ -730,18 +920,34 @@ public final class MainActivity extends AppCompatActivity {
         io.execute(() -> {
             try {
                 List<Shelf.TrackIn> incoming = new ArrayList<>();
-                for (Cast.Caption caption : chosen.captions) {
+                List<Cast.Caption> captions = new ArrayList<>(chosen.captions);
+                captions.sort((a, b) -> Integer.compare(captionRank(a), captionRank(b)));
+                java.util.Set<String> seen = new java.util.HashSet<>();
+                for (Cast.Caption caption : captions) {
+                    String lang = caption.lang.isEmpty() ? "und" : caption.lang;
+                    if (seen.contains(lang)) {
+                        continue;
+                    }
                     try {
                         String raw = fetchText(caption.url);
-                        String suffix = caption.type.contains("srt") ? "srt" : "vtt";
-                        Cues.Transcript transcript = Cues.parse(raw, suffix, false);
+                        Cues.Transcript transcript = Cues.parse(raw, captionSuffix(caption), false);
                         if (transcript.spans.isEmpty()) {
                             continue;
                         }
-                        String lang = caption.lang.isEmpty() ? "und" : caption.lang;
+                        seen.add(lang);
                         incoming.add(new Shelf.TrackIn(lang, "manual", lang + " · podcast", transcript));
                     } catch (Exception ignored) {
                         // One missing caption file does not drop the episode.
+                    }
+                }
+                if (!chosen.chapters.isEmpty()) {
+                    try {
+                        Cues.Transcript chapters = Cues.parse(fetchText(chosen.chapters), "json", false);
+                        if (!chapters.spans.isEmpty()) {
+                            incoming.add(new Shelf.TrackIn("und", "manual", "chapters", chapters));
+                        }
+                    } catch (Exception ignored) {
+                        // Chapters are optional.
                     }
                 }
                 String show = "";
@@ -751,13 +957,17 @@ public final class MainActivity extends AppCompatActivity {
                         break;
                     }
                 }
+                String feed = feedOf.containsKey(chosen.audio) ? feedOf.get(chosen.audio) : "";
                 long id = Shelf.save(
-                        db, "Podcast", show, show, "", chosen.audio, chosen.title,
-                        chosen.page, chosen.audio, incoming);
+                        db, "Podcast", feed.isEmpty() ? show : feed, show, feed,
+                        chosen.audio, chosen.title, chosen.page, chosen.audio, incoming);
                 Shelf.Video video = Shelf.video(db, id);
                 boolean bare = incoming.isEmpty();
                 runOnUiThread(() -> {
-                    show(video);
+                    if (videoId != id) {
+                        show(video, false);
+                    }
+                    play(chosen.audio, 0);
                     if (bare) {
                         status.setText("No transcript. Keep, then Recognize.");
                     }
@@ -829,8 +1039,7 @@ public final class MainActivity extends AppCompatActivity {
                     showExplore(rows, label);
                 });
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -856,7 +1065,10 @@ public final class MainActivity extends AppCompatActivity {
                 Shelf.Video video = Shelf.video(db, saved);
                 String blurb = clip.description;
                 runOnUiThread(() -> {
-                    show(video);
+                    if (videoId != saved) {
+                        show(video, false);
+                    }
+                    play(media, 0);
                     if (!blurb.isEmpty()) {
                         description.setText(blurb);
                     }
@@ -902,8 +1114,7 @@ public final class MainActivity extends AppCompatActivity {
                     showExplore(rows, label);
                 });
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -986,8 +1197,7 @@ public final class MainActivity extends AppCompatActivity {
                     showExplore(rows, label);
                 });
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1047,8 +1257,7 @@ public final class MainActivity extends AppCompatActivity {
             try {
                 showTed(Ted.home(postTed(Ted.GRAPHQL, Ted.homeBody())), "TED");
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1059,8 +1268,7 @@ public final class MainActivity extends AppCompatActivity {
             try {
                 showTed(Ted.hits(postTed(Ted.SEARCH, Ted.searchBody(query))), "TED");
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1077,8 +1285,7 @@ public final class MainActivity extends AppCompatActivity {
                 showExplore(rows, label);
             });
         } catch (Exception e) {
-            String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-            runOnUiThread(() -> exploreStatus.setText(message));
+            noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
         }
     }
 
@@ -1089,10 +1296,15 @@ public final class MainActivity extends AppCompatActivity {
         io.execute(() -> {
             try {
                 String slug = Ted.slug(page);
-                Ted.Talk talk = Ted.details(postTed(Ted.GRAPHQL, Ted.detailsBody(slug)));
+                String raw = postTed(Ted.GRAPHQL, Ted.detailsBody(slug));
+                Ted.Talk talk = Ted.details(raw);
                 String media = Ted.choose(talk, qualityHeight);
                 if (media.isEmpty()) {
-                    throw new java.io.IOException("no video");
+                    String head = raw.replace('\n', ' ');
+                    if (head.length() > 120) {
+                        head = head.substring(0, 120);
+                    }
+                    throw new java.io.IOException("no video: " + head);
                 }
                 java.util.ArrayList<Shelf.TrackIn> tracks = new java.util.ArrayList<>();
                 if (!talk.metadata.isEmpty()) {
@@ -1183,8 +1395,7 @@ public final class MainActivity extends AppCompatActivity {
                     showExplore(rows, label);
                 });
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1269,8 +1480,7 @@ public final class MainActivity extends AppCompatActivity {
                     showExplore(rows, label);
                 });
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1282,9 +1492,14 @@ public final class MainActivity extends AppCompatActivity {
         io.execute(() -> {
             try {
                 String[] key = Fosdem.key(page);
-                Fosdem.Talk talk = Fosdem.event(fetchFosdem(Fosdem.eventUrl(key[0], key[1])));
+                String raw = fetchFosdem(Fosdem.eventUrl(key[0], key[1]));
+                Fosdem.Talk talk = Fosdem.event(raw);
                 if (talk.media.isEmpty()) {
-                    throw new java.io.IOException("no video");
+                    String head = raw.replace('\n', ' ');
+                    if (head.length() > 120) {
+                        head = head.substring(0, 120);
+                    }
+                    throw new java.io.IOException("no video: " + head);
                 }
                 java.util.ArrayList<Shelf.TrackIn> tracks = new java.util.ArrayList<>();
                 for (Fosdem.Caption caption : talk.captions) {
@@ -1356,8 +1571,7 @@ public final class MainActivity extends AppCompatActivity {
                     showExplore(rows, label);
                 });
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1384,8 +1598,7 @@ public final class MainActivity extends AppCompatActivity {
                     showExplore(rows, label);
                 });
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1452,8 +1665,7 @@ public final class MainActivity extends AppCompatActivity {
             try {
                 showKick(Kick.livestreams(fetchKick(Kick.HOME)), "Kick");
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1464,8 +1676,7 @@ public final class MainActivity extends AppCompatActivity {
             try {
                 showKick(Kick.livestreams(fetchKick(Kick.searchUrl(query))), "Kick");
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1614,8 +1825,7 @@ public final class MainActivity extends AppCompatActivity {
             try {
                 showNico(Nico.videos(fetchNico(Nico.HOME).body), "Niconico");
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1626,8 +1836,7 @@ public final class MainActivity extends AppCompatActivity {
             try {
                 showNico(Nico.videos(fetchNico(Nico.searchUrl(query)).body), "Niconico");
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1638,8 +1847,7 @@ public final class MainActivity extends AppCompatActivity {
             try {
                 showNico(Nico.videos(fetchNico(Nico.userUrl(id)).body), "Niconico");
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1779,8 +1987,7 @@ public final class MainActivity extends AppCompatActivity {
                 ensureBili();
                 showBili(Bili.home(fetchText(Bili.HOME, biliBuvid)), "Bilibili");
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1793,8 +2000,7 @@ public final class MainActivity extends AppCompatActivity {
                 String body = fetchText(Bili.searchUrl(query, biliMixin, now()), biliBuvid);
                 showBili(Bili.search(body), "Bilibili");
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1807,8 +2013,7 @@ public final class MainActivity extends AppCompatActivity {
                 String body = fetchText(Bili.spaceUrl(mid, biliMixin, now()), biliBuvid);
                 showBili(Bili.space(body), "Bilibili");
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -1929,10 +2134,10 @@ public final class MainActivity extends AppCompatActivity {
                 .build();
         okhttp3.Request.Builder request = new okhttp3.Request.Builder()
                 .url(url)
-                .header("User-Agent", OkDownloader.USER_AGENT)
-                .header("Referer", "https://www.bilibili.com/");
+                .header("User-Agent", OkDownloader.USER_AGENT);
         if (buvid != null && !buvid.isEmpty()) {
             request.header("Cookie", "buvid3=" + buvid);
+            request.header("Referer", "https://www.bilibili.com/");
         }
         okhttp3.Request built = request.build();
         try (okhttp3.Response response = client.newCall(built).execute()) {
@@ -2053,15 +2258,52 @@ public final class MainActivity extends AppCompatActivity {
             openArchive(query, 0);
             return;
         }
+        if (Ted.slug(query) != null) {
+            openTed(query, 0);
+            return;
+        }
+        if (Chute.videoId(query) != null) {
+            openChute(query);
+            return;
+        }
+        if (Bili.bvid(query) != null) {
+            openBili(query);
+            return;
+        }
+        if (Nico.videoId(query) != null) {
+            openNico(query);
+            return;
+        }
+        if (Rumble.embedId(query) != null || Rumble.isWatch(query)) {
+            openRumble(query);
+            return;
+        }
+        if (Kick.slug(query) != null) {
+            openKick(query);
+            return;
+        }
+        String odyseeVideo = Odysee.videoUri(query);
+        if (odyseeVideo != null) {
+            openOdysee(odyseeVideo, query);
+            return;
+        }
+        if (Fosdem.key(query) != null) {
+            openFosdem(query);
+            return;
+        }
+        if (Nasa.slug(query) != null) {
+            openNasa(query);
+            return;
+        }
+        if (RedBull.id(query) != null) {
+            openRedBull(query);
+            return;
+        }
         exploreStatus.setText("Searching");
         String typed = query;
         int which = Math.max(exploreService.getSelectedItemPosition(), 0);
         io.execute(() -> {
             try {
-                if (Chute.videoId(typed) != null) {
-                    runOnUiThread(() -> openChute(typed));
-                    return;
-                }
                 String chuteChannel = Chute.channelId(typed);
                 if (chuteChannel != null) {
                     loadChute(Chute.CHANNEL, Chute.channelBody(chuteChannel), "BitChute");
@@ -2069,11 +2311,6 @@ public final class MainActivity extends AppCompatActivity {
                 }
                 if (chuteSelected() && !typed.contains("://")) {
                     loadChute(Chute.SEARCH, Chute.searchBody(typed), "BitChute");
-                    return;
-                }
-                String biliId = Bili.bvid(typed);
-                if (biliId != null) {
-                    runOnUiThread(() -> openBili(typed));
                     return;
                 }
                 String biliChannel = Bili.mid(typed);
@@ -2085,10 +2322,6 @@ public final class MainActivity extends AppCompatActivity {
                     loadBiliSearch(typed);
                     return;
                 }
-                if (Nico.videoId(typed) != null) {
-                    runOnUiThread(() -> openNico(typed));
-                    return;
-                }
                 String nicoUser = Nico.userId(typed);
                 if (nicoUser != null) {
                     loadNicoUser(nicoUser);
@@ -2098,27 +2331,12 @@ public final class MainActivity extends AppCompatActivity {
                     loadNicoSearch(typed);
                     return;
                 }
-                if (Rumble.embedId(typed) != null || Rumble.isWatch(typed)) {
-                    runOnUiThread(() -> openRumble(typed));
-                    return;
-                }
                 if (rumbleSelected() && !typed.contains("://")) {
-                    runOnUiThread(() -> exploreStatus.setText(
-                            "Paste a Rumble link. Search is blocked here."));
-                    return;
-                }
-                String kickSlug = Kick.slug(typed);
-                if (kickSlug != null) {
-                    runOnUiThread(() -> openKick(typed));
+                    noteFeed("Paste a Rumble link. Search is blocked here.");
                     return;
                 }
                 if (kickSelected() && !typed.contains("://")) {
                     loadKickSearch(typed);
-                    return;
-                }
-                String odyseeVideo = Odysee.videoUri(typed);
-                if (odyseeVideo != null) {
-                    runOnUiThread(() -> openOdysee(odyseeVideo, typed));
                     return;
                 }
                 String odyseeChannel = Odysee.channelUri(typed);
@@ -2130,10 +2348,6 @@ public final class MainActivity extends AppCompatActivity {
                     loadOdysee(Odysee.PROXY + "claim_search", Odysee.searchBody(typed), "Odysee");
                     return;
                 }
-                if (Fosdem.key(typed) != null) {
-                    runOnUiThread(() -> openFosdem(typed));
-                    return;
-                }
                 if (fosdemSelected() && !typed.contains("://")) {
                     loadFosdem(Fosdem.searchUrl(typed), "FOSDEM");
                     return;
@@ -2142,24 +2356,12 @@ public final class MainActivity extends AppCompatActivity {
                     loadArchive(Archive.searchUrl(typed), "Internet Archive");
                     return;
                 }
-                if (Ted.slug(typed) != null) {
-                    runOnUiThread(() -> openTed(typed, 0));
-                    return;
-                }
                 if (tedSelected() && !typed.contains("://")) {
                     loadTedSearch(typed);
                     return;
                 }
-                if (Nasa.slug(typed) != null) {
-                    runOnUiThread(() -> openNasa(typed));
-                    return;
-                }
                 if (nasaSelected() && !typed.contains("://")) {
                     loadNasa(Nasa.searchUrl(typed), "NASA+");
-                    return;
-                }
-                if (RedBull.id(typed) != null) {
-                    runOnUiThread(() -> openRedBull(typed));
                     return;
                 }
                 if (redBullSelected() && !typed.contains("://")) {
@@ -2176,7 +2378,16 @@ public final class MainActivity extends AppCompatActivity {
                 } catch (Exception ignored) {
                     link = null;
                 }
-                if (link == null && looksLikeFeed(typed) && openFeed(typed)) {
+                if (typed.contains("<opml") || typed.contains("xmlUrl=")) {
+                    restoreFeeds(typed);
+                    return;
+                }
+                if (link == null && looksLikeFeed(typed)) {
+                    if (rssPanel) {
+                        openRss(typed);
+                    } else {
+                        openFeed(typed);
+                    }
                     return;
                 }
                 if (link == StreamingService.LinkType.STREAM
@@ -2202,8 +2413,7 @@ public final class MainActivity extends AppCompatActivity {
                     showSession(session, label);
                 });
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         });
     }
@@ -2213,9 +2423,63 @@ public final class MainActivity extends AppCompatActivity {
         showExplore(session == null ? Collections.emptyList() : session.items, label);
     }
 
-    private void showExplore(List<Browse.Found> rows, String label) {
+    /** A feed that cannot be listed. The previous rows are cleared. */
+    private void noteFeed(String message) {
+        runOnUiThread(() -> {
+            feedEpisodes = Collections.emptyList();
+            feedAt = 0;
+            linkRows = Collections.emptyList();
+            linkAt = 0;
+            armMore(false);
+            exploreRows = Collections.emptyList();
+            exploreSession = null;
+            episodes = Collections.emptyList();
+            exploreStatus.setText(message);
+            exploreList.setAdapter(new ExploreAdapter());
+            showTab(0);
+        });
+    }
+
+    private void showFeedPage() {
+        int end = Math.min(feedAt + Cast.PAGE, feedEpisodes.size());
+        List<Cast.Episode> page = feedAt >= end
+                ? Collections.emptyList()
+                : new ArrayList<>(feedEpisodes.subList(feedAt, end));
+        List<Browse.Found> rows = new ArrayList<>();
+        for (Cast.Episode episode : page) {
+            rows.add(new Browse.Found("episode", episode.title, episode.audio, feedLabel));
+        }
+        episodes = page;
+        linkRows = Collections.emptyList();
         exploreRows = rows;
-        if (rows.isEmpty() || !"episode".equals(rows.get(0).kind)) {
+        exploreSession = null;
+        armMore(false);
+        String more = end < feedEpisodes.size() ? " · more" : "";
+        exploreStatus.setText(feedLabel + " · " + rows.size() + more);
+        exploreList.setAdapter(new ExploreAdapter());
+        showTab(0);
+    }
+
+    private void armMore(boolean share) {
+        shareCollection = share;
+        ((Button) findViewById(R.id.explore_more)).setText(share ? R.string.share : R.string.more);
+    }
+
+    private void showExplore(List<Browse.Found> rows, String label) {
+        feedEpisodes = Collections.emptyList();
+        feedAt = 0;
+        linkRows = Collections.emptyList();
+        linkAt = 0;
+        armMore(false);
+        exploreRows = rows;
+        boolean anyEpisode = false;
+        for (Browse.Found row : rows) {
+            if ("episode".equals(row.kind)) {
+                anyEpisode = true;
+                break;
+            }
+        }
+        if (!anyEpisode) {
             episodes = Collections.emptyList();
         }
         String more = exploreSession != null && exploreSession.next != null ? " · more" : "";
@@ -2225,6 +2489,20 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void more() {
+        if (shareCollection) {
+            shareFeeds();
+            return;
+        }
+        if (!linkRows.isEmpty() && linkAt + Cast.PAGE < linkRows.size()) {
+            linkAt += Cast.PAGE;
+            showLinkPage();
+            return;
+        }
+        if (!feedEpisodes.isEmpty() && feedAt + Cast.PAGE < feedEpisodes.size()) {
+            feedAt += Cast.PAGE;
+            showFeedPage();
+            return;
+        }
         if (exploreSession == null || exploreSession.next == null) {
             exploreStatus.setText("No further page");
             return;
@@ -2235,8 +2513,8 @@ public final class MainActivity extends AppCompatActivity {
                 Browse.Session session = Browse.more(exploreSession);
                 runOnUiThread(() -> showSession(session, "More"));
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                String missed = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(missed));
             }
         });
     }
@@ -2245,7 +2523,37 @@ public final class MainActivity extends AppCompatActivity {
         exploreStatus.setText("Checking");
         io.execute(() -> {
             List<Browse.Found> fresh = new ArrayList<>();
+            List<Cast.Episode> heard = new ArrayList<>();
             for (String[] row : Shelf.checkRows(db)) {
+                if ("RSS".equals(row[1])) {
+                    continue;
+                }
+                if ("Podcast".equals(row[1])) {
+                    try {
+                        String body = fetchText(row[2]);
+                        if (body.contains("<rss") || body.contains("<feed")) {
+                            Cast.Show show = Cast.parse(body);
+                            String label = show.title.isEmpty() ? row[3] : show.title;
+                            int seen = 0;
+                            for (Cast.Episode episode : show.episodes) {
+                                if (seen == Cast.PAGE) {
+                                    break;
+                                }
+                                seen++;
+                                feedOf.put(episode.audio, row[2]);
+                                if (Shelf.known(db, episode.audio) || Shelf.known(db, episode.page)) {
+                                    continue;
+                                }
+                                fresh.add(new Browse.Found(
+                                        "episode", episode.title, episode.audio, label));
+                                heard.add(episode);
+                            }
+                        }
+                    } catch (Exception ignored) {
+                        // One feed failing leaves the others.
+                    }
+                    continue;
+                }
                 try {
                     StreamingService service = NewPipe.getServiceByUrl(row[2]);
                     Browse.Session session = "playlist".equals(row[0])
@@ -2262,6 +2570,7 @@ public final class MainActivity extends AppCompatActivity {
             }
             if (fresh.isEmpty()) {
                 runOnUiThread(() -> {
+                    episodes = heard;
                     exploreSession = null;
                     showExplore(fresh, "No new videos");
                 });
@@ -2269,7 +2578,12 @@ public final class MainActivity extends AppCompatActivity {
             }
             int withText = 0;
             int failed = 0;
+            int episodeCount = 0;
             for (int i = 0; i < fresh.size(); i++) {
+                if ("episode".equals(fresh.get(i).kind)) {
+                    episodeCount++;
+                    continue;
+                }
                 int at = i + 1;
                 int total = fresh.size();
                 runOnUiThread(() -> exploreStatus.setText("Check " + at + " of " + total));
@@ -2283,9 +2597,15 @@ public final class MainActivity extends AppCompatActivity {
             }
             int found = withText;
             int missed = failed;
+            int shows = episodeCount;
+            String label = found == 0 && shows > 0
+                    ? shows + " new episode" + (shows == 1 ? "" : "s")
+                    : "Checked " + found + " with captions"
+                    + (shows > 0 ? " · " + shows + " episodes" : "");
             runOnUiThread(() -> {
+                episodes = heard;
                 exploreSession = null;
-                showExplore(fresh, "Checked " + found + " with captions");
+                showExplore(fresh, label);
                 if (missed > 0) {
                     exploreStatus.setText(exploreStatus.getText() + " · " + missed + " failed");
                 }
@@ -2301,6 +2621,113 @@ public final class MainActivity extends AppCompatActivity {
         exploreBack = new ArrayList<>(exploreRows);
         exploreSession = null;
         showExplore(rows, "Bookmarks");
+    }
+
+    private void showSavedFeeds(String service) {
+        rssPanel = "RSS".equals(service);
+        List<Browse.Found> rows = new ArrayList<>();
+        for (String[] row : Shelf.follows(db)) {
+            if (service.equals(row[1])) {
+                rows.add(new Browse.Found(row[0], row[3], row[2], row[1]));
+            }
+        }
+        showTab(0);
+        showExplore(rows, service);
+        shareCollection = true;
+        armMore(true);
+        if (rows.isEmpty()) {
+            exploreStatus.setText("RSS".equals(service)
+                    ? "Paste an RSS feed" : "Paste a podcast feed");
+        }
+    }
+
+    private void shareFeeds() {
+        List<String[]> feeds = new ArrayList<>();
+        for (String[] row : Shelf.follows(db)) {
+            if ("RSS".equals(row[1]) || "Podcast".equals(row[1])) {
+                feeds.add(new String[] {row[1], row[3], row[2]});
+            }
+        }
+        if (feeds.isEmpty()) {
+            exploreStatus.setText("No feeds to share");
+            return;
+        }
+        android.content.Intent send = new android.content.Intent(android.content.Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(android.content.Intent.EXTRA_SUBJECT, "CuePipe feeds");
+        send.putExtra(android.content.Intent.EXTRA_TEXT, Cast.opml(feeds));
+        startActivity(android.content.Intent.createChooser(send, getString(R.string.share)));
+    }
+
+    private void restoreFeeds(String note) {
+        try {
+            List<String[]> feeds = Cast.outlines(note);
+            if (feeds.isEmpty()) {
+                noteFeed("No feeds in that note");
+                return;
+            }
+            for (String[] feed : feeds) {
+                Shelf.follow(db, feed[0], feed[2], feed[1], true);
+            }
+            int count = feeds.size();
+            runOnUiThread(() -> {
+                showFollows();
+                exploreStatus.setText(count + " feeds restored");
+            });
+        } catch (Exception e) {
+            noteFeed(e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+    }
+
+    private void openLink(String url) {
+        try {
+            startActivity(new android.content.Intent(
+                    android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)));
+        } catch (Exception e) {
+            shareText("", url);
+        }
+    }
+
+    private void shareEpisode(Browse.Found item) {
+        String page = item.url;
+        for (List<Cast.Episode> list : new List[] {episodes, feedEpisodes}) {
+            for (Cast.Episode episode : list) {
+                if (item.url.equals(episode.audio) && episode.page != null && !episode.page.isEmpty()) {
+                    page = episode.page;
+                    break;
+                }
+            }
+        }
+        String text = item.name + "\n" + (page.equals(item.url) ? item.url : page + "\n" + item.url);
+        shareText(item.name, text);
+    }
+
+    private void shareWatching() {
+        String name = title.getText().toString();
+        String page = pageUrl == null ? "" : pageUrl;
+        String audio = playUrl == null ? "" : playUrl;
+        if (page.isEmpty() && audio.isEmpty()) {
+            status.setText("Nothing to share");
+            return;
+        }
+        String text = name;
+        if (!page.isEmpty()) {
+            text = text + "\n" + page;
+        }
+        if (!audio.isEmpty() && !audio.equals(page)) {
+            text = text + "\n" + audio;
+        }
+        shareText(name, text);
+    }
+
+    private void shareText(String subject, String text) {
+        android.content.Intent send = new android.content.Intent(android.content.Intent.ACTION_SEND);
+        send.setType("text/plain");
+        if (subject != null && !subject.isEmpty()) {
+            send.putExtra(android.content.Intent.EXTRA_SUBJECT, subject);
+        }
+        send.putExtra(android.content.Intent.EXTRA_TEXT, text);
+        startActivity(android.content.Intent.createChooser(send, getString(R.string.share)));
     }
 
     private void showFollows() {
@@ -2340,6 +2767,22 @@ public final class MainActivity extends AppCompatActivity {
         Browse.Found item = exploreRows.get(position);
         if ("episode".equals(item.kind)) {
             openEpisode(item.url);
+            return;
+        }
+        if ("link".equals(item.kind)) {
+            openLink(item.url);
+            return;
+        }
+        if ("RSS".equals(item.meta)) {
+            exploreStatus.setText("Opening");
+            String url = item.url;
+            io.execute(() -> openRss(url));
+            return;
+        }
+        if ("Podcast".equals(item.meta)) {
+            exploreStatus.setText("Opening");
+            String url = item.url;
+            io.execute(() -> openFeed(url));
             return;
         }
         if (Chute.videoId(item.url) != null) {
@@ -2404,8 +2847,8 @@ public final class MainActivity extends AppCompatActivity {
                     showSession(session, item.name);
                 });
             } catch (Exception e) {
-                String message = e.getClass().getSimpleName() + ": " + e.getMessage();
-                runOnUiThread(() -> exploreStatus.setText(message));
+                String missed = e.getClass().getSimpleName() + ": " + e.getMessage();
+                runOnUiThread(() -> exploreStatus.setText(missed));
             }
         });
     }
@@ -2937,6 +3380,31 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    /** The HTTP code and host when the CDN refused the stream. */
+    private static String playFailure(androidx.media3.common.PlaybackException error) {
+        Throwable cause = error.getCause();
+        while (cause != null) {
+            if (cause instanceof androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException http) {
+                String host = "";
+                if (http.dataSpec != null && http.dataSpec.uri != null
+                        && http.dataSpec.uri.getHost() != null) {
+                    host = " " + http.dataSpec.uri.getHost();
+                }
+                return "HTTP " + http.responseCode + host;
+            }
+            cause = cause.getCause();
+        }
+        cause = error.getCause();
+        if (cause != null && cause.getMessage() != null && !cause.getMessage().isEmpty()) {
+            String message = cause.getMessage();
+            if (message.length() > 120) {
+                message = message.substring(0, 120);
+            }
+            return cause.getClass().getSimpleName() + ": " + message;
+        }
+        return "This source is not available";
+    }
+
     private void jump(int t0) {
         showVideo();
         String local = Shelf.prefer(Shelf.localPath(db, videoId), "");
@@ -3024,6 +3492,33 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    /** Writes the playhead when it has moved, and clears it near the end. */
+    private void rememberPlace() {
+        if (videoId <= 0 || player.getMediaItemCount() == 0) {
+            return;
+        }
+        int duration = 0;
+        long length = player.getDuration();
+        if (length > 0 && length < Integer.MAX_VALUE) {
+            duration = (int) length;
+        }
+        int keep = Shelf.keptPlace((int) player.getCurrentPosition(), duration);
+        if (keep < 0) {
+            return;
+        }
+        if (remembered >= 0 && keep > 0 && Math.abs(keep - remembered) < 5000) {
+            return;
+        }
+        remembered = keep;
+        Shelf.remember(db, videoId, keep);
+    }
+
+    @Override
+    protected void onPause() {
+        rememberPlace();
+        super.onPause();
+    }
+
     private void play(String url, int t0) {
         playUrl = url;
         android.net.Uri uri = url.startsWith("/")
@@ -3038,6 +3533,39 @@ public final class MainActivity extends AppCompatActivity {
         player.prepare();
         player.seekTo(t0);
         player.play();
+        fitAudio(audioFile(url));
+    }
+
+    /** An audio file does not need the tall black picture. */
+    private static boolean audioFile(String url) {
+        if (url == null) {
+            return false;
+        }
+        String path = url.toLowerCase(Locale.US);
+        int query = path.indexOf('?');
+        if (query >= 0) {
+            path = path.substring(0, query);
+        }
+        return path.endsWith(".mp3") || path.endsWith(".m4a") || path.endsWith(".m4b")
+                || path.endsWith(".aac") || path.endsWith(".ogg") || path.endsWith(".opus")
+                || path.endsWith(".flac") || path.endsWith(".wav");
+    }
+
+    private void fitAudio(boolean audio) {
+        if (mini) {
+            return;
+        }
+        android.widget.FrameLayout frame = findViewById(R.id.player_frame);
+        android.widget.LinearLayout.LayoutParams lp =
+                (android.widget.LinearLayout.LayoutParams) frame.getLayoutParams();
+        lp.width = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+        lp.height = dp(audio ? 56 : 200);
+        frame.setLayoutParams(lp);
+        PlayerView playerView = findViewById(R.id.player);
+        playerView.setControllerShowTimeoutMs(audio ? 0 : 5000);
+        if (audio) {
+            playerView.showController();
+        }
     }
 
     private void keep() {
@@ -3061,7 +3589,7 @@ public final class MainActivity extends AppCompatActivity {
         io.execute(() -> {
             try {
                 StreamInfo info = StreamInfo.getInfo(page);
-                String source = fileUrl(info);
+                String source = fileUrl(info, qualityHeight);
                 if (source.isEmpty()) {
                     throw new java.io.IOException("no stream");
                 }
@@ -3069,7 +3597,8 @@ public final class MainActivity extends AppCompatActivity {
                 if (dir == null) {
                     dir = getFilesDir();
                 }
-                String ext = source.contains(".m4a") || source.contains("mime=audio") ? ".m4a" : ".mp4";
+                String ext = qualityHeight == 0 || source.contains(".m4a") || source.contains("mime=audio")
+                        ? ".m4a" : ".mp4";
                 java.io.File dest = new java.io.File(dir, id + ext);
                 // A default OkHttp client stops after 10s of silence. The first
                 // bytes of a YouTube stream took about 8s from this network.
@@ -3123,16 +3652,18 @@ public final class MainActivity extends AppCompatActivity {
                 return;
             }
             Shelf.Hit hit = hits.get(position);
-            show(Shelf.video(db, hit.videoId));
+            show(Shelf.video(db, hit.videoId), false);
             showVideo();
             int index = indexOfHit(hit);
+            int at = 0;
             if (index >= 0 && index < spans.size()) {
                 followLines = true;
                 followed = index;
                 lines.setItemChecked(index, true);
                 lines.setSelectionFromTop(index, 0);
-                playHere(spans.get(index).t0);
+                at = spans.get(index).t0;
             }
+            jump(at);
             return;
         }
         if (position < 0 || position >= shelfLines.size()) {
@@ -3147,8 +3678,10 @@ public final class MainActivity extends AppCompatActivity {
             reloadLibrary();
             return;
         }
-        show(line.video);
+        int at = Shelf.place(db, line.video.id);
+        show(line.video, false);
         showVideo();
+        jump(at);
     }
 
     private int indexOfHit(Shelf.Hit hit) {
@@ -3295,7 +3828,7 @@ public final class MainActivity extends AppCompatActivity {
                     }
                     List<Cues.Span> rowSpans = Shelf.readSpans(db, trackId);
                     for (Near.Paragraph paragraph : Near.paragraphs(rowSpans)) {
-                        int hash = paragraph.text.hashCode();
+                        int hash = paragraph.text.hashCode() ^ Meaning.SPACE;
                         float[] vector = db.readVec(trackId, paragraph.spanIndex, hash);
                         if (vector == null) {
                             vector = Meaning.passage(this, paragraph.text);
@@ -3493,6 +4026,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void show(Shelf.Video video, boolean prepare) {
         videoId = video.id;
+        remembered = -1;
         followLines = true;
         followed = -1;
         playUrl = video.playUrl == null ? "" : video.playUrl;
@@ -3664,10 +4198,11 @@ public final class MainActivity extends AppCompatActivity {
         if (at >= 0) {
             Cues.Span span = spans.get(at);
             if (time >= span.t0 && time < span.t1 && span.text != null && text.startsWith(span.text)) {
-                range = Prose.wordAt(span.text, span.t0, span.t1, time);
+                int[] word = Prose.wordAt(span.text, span.t0, span.t1, time);
+                range = Prose.phraseAround(span.text, word[0], word[1]);
             }
         }
-        setMarked(burn, text, range[0], range[1]);
+        setUnderlined(burn, text, range[0], range[1]);
         burn.setVisibility(View.VISIBLE);
     }
 
@@ -3734,17 +4269,18 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void setMarked(TextView view, String text, int start, int end) {
+    private void setUnderlined(TextView view, String text, int start, int end) {
         if (text == null || start < 0 || end <= start || end > text.length()) {
             view.setText(text);
             return;
         }
         android.text.SpannableString marked = new android.text.SpannableString(text);
-        int flags = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE;
-        marked.setSpan(new android.text.style.ForegroundColorSpan(getColor(R.color.accent)), start, end, flags);
-        marked.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD), start, end, flags);
+        marked.setSpan(new android.text.style.UnderlineSpan(), start, end,
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         view.setText(marked);
     }
+
+
 
     private void setMarks(TextView view, String text, java.util.List<Query.Mark> marks) {
         if (text == null || marks == null || marks.isEmpty()) {
@@ -3896,38 +4432,25 @@ public final class MainActivity extends AppCompatActivity {
         return firstAudio(info.getAudioStreams());
     }
 
-    /** A progressive video file, so burned-in reading has frames. Audio is the fallback. */
-    private static String fileUrl(StreamInfo info) {
-        String picture = direct(info.getVideoStreams());
-        if (picture.isEmpty()) {
-            picture = direct(info.getVideoOnlyStreams());
+    /**
+     * One file for Keep. Audio quality is the audio stream. Otherwise the
+     * progressive file nearest the target, then a picture-only file, then audio.
+     * Auto uses 720. Playlists are skipped.
+     */
+    private static String fileUrl(StreamInfo info, int qualityHeight) {
+        if (qualityHeight == 0) {
+            return audioUrl(info);
         }
-        if (!picture.isEmpty()) {
-            return picture;
+        int target = qualityHeight < 0 ? 720 : qualityHeight;
+        VideoStream progressive = nearest(info.getVideoStreams(), target);
+        if (progressive != null) {
+            return progressive.getContent();
+        }
+        VideoStream picture = nearest(info.getVideoOnlyStreams(), target);
+        if (picture != null) {
+            return picture.getContent();
         }
         return audioUrl(info);
-    }
-
-    private static String direct(List<VideoStream> streams) {
-        if (streams == null) {
-            return "";
-        }
-        String best = "";
-        int bestRate = Integer.MAX_VALUE;
-        for (VideoStream video : streams) {
-            if (!video.isUrl() || video.getContent() == null || video.getContent().isEmpty()) {
-                continue;
-            }
-            if (video.getContent().contains(".m3u8")) {
-                continue;
-            }
-            int rate = video.getBitrate();
-            if (best.isEmpty() || (rate > 0 && rate < bestRate)) {
-                best = video.getContent();
-                bestRate = rate > 0 ? rate : bestRate;
-            }
-        }
-        return best;
     }
 
     private static String firstUrl(List<VideoStream> streams) {
@@ -4204,7 +4727,8 @@ public final class MainActivity extends AppCompatActivity {
                 body.setTextAppearance(android.R.style.TextAppearance_Medium);
                 body.setVisibility(View.VISIBLE);
                 if (position == followed) {
-                    setMarked(body, block.text, markStart, markEnd);
+                    int[] phrase = Prose.phraseAround(block.text, markStart, markEnd);
+                    setUnderlined(body, block.text, phrase[0], phrase[1]);
                 } else {
                     body.setText(block.text);
                 }
@@ -4221,9 +4745,13 @@ public final class MainActivity extends AppCompatActivity {
             }
             first.setTextAppearance(android.R.style.TextAppearance_Medium);
             Cues.Span span = primarySpans.get(position);
-            String line = stamp(span.t0) + "  " + span.text;
+            String cue = span.text == null ? "" : span.text;
+            String line = stamp(span.t0) + "  " + cue;
             if (position == followed) {
-                setMarked(first, line, markStart, markEnd);
+                int pad = line.length() - cue.length();
+                int[] phrase = Prose.phraseAround(cue, markStart - pad, markEnd - pad);
+                setUnderlined(first, line, phrase[0] < 0 ? -1 : phrase[0] + pad,
+                        phrase[1] < 0 ? -1 : phrase[1] + pad);
             } else {
                 first.setText(line);
             }

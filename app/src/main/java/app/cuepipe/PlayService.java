@@ -43,7 +43,11 @@ public final class PlayService extends Service {
         if (shared == null) {
             Context app = context.getApplicationContext();
             shared = new ExoPlayer.Builder(app)
-                    .setMediaSourceFactory(new DefaultMediaSourceFactory(app).setDataSourceFactory(sources()))
+                    // OkHttp rejects a file URI. DefaultDataSource plays a kept file.
+                    .setMediaSourceFactory(new DefaultMediaSourceFactory(app)
+                            .setDataSourceFactory(
+                                    new androidx.media3.datasource.DefaultDataSource.Factory(
+                                            app, sources())))
                     .setAudioAttributes(new AudioAttributes.Builder()
                             .setUsage(C.USAGE_MEDIA)
                             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -191,18 +195,103 @@ public final class PlayService extends Service {
     /** nicosid from the watch page. The HLS playlist refuses a request without it. */
     static volatile String nicoCookie = "";
 
-    /** Bilibili's CDN refuses a request that has no Referer. */
+    /**
+     * OkHttp, not {@code HttpURLConnection}. Android drops Referer and Origin
+     * on that connection, and Odysee answers 401 without them.
+     */
     static androidx.media3.datasource.DataSource.Factory sources() {
-        androidx.media3.datasource.DefaultHttpDataSource.Factory http =
-                new androidx.media3.datasource.DefaultHttpDataSource.Factory()
+        androidx.media3.datasource.okhttp.OkHttpDataSource.Factory http =
+                new androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(HTTP)
                         .setUserAgent(OkDownloader.USER_AGENT);
         return () -> new Referer(http.createDataSource());
     }
 
-    private static final class Referer implements androidx.media3.datasource.DataSource {
-        private final androidx.media3.datasource.DefaultHttpDataSource inner;
+    /**
+     * A missing Range is sent as {@code bytes=0-}. Bilibili's CDN answers 403
+     * to that open range, so those hosts are closed on the last byte.
+     */
+    private static final okhttp3.OkHttpClient HTTP = new okhttp3.OkHttpClient.Builder()
+            .addInterceptor(chain -> {
+                okhttp3.Request request = chain.request();
+                String host = request.url().host();
+                String path = request.url().encodedPath();
+                if (Bili.cdnHost(host, path)) {
+                    String range = request.header("Range");
+                    if (range == null || range.endsWith("-")) {
+                        String closed = Bili.closedRange(range, biliDocumentSize(request));
+                        if (closed != null && !closed.equals(range)) {
+                            request = request.newBuilder().header("Range", closed).build();
+                        }
+                    }
+                } else if (request.header("Range") == null) {
+                    request = request.newBuilder().header("Range", "bytes=0-").build();
+                }
+                return playlist(chain.proceed(request));
+            })
+            .build();
 
-        Referer(androidx.media3.datasource.DefaultHttpDataSource inner) {
+    /**
+     * Akamai sometimes answers a playlist with a gzip body and status 206.
+     * The HLS parser requires {@code #EXTM3U} as the first bytes.
+     */
+    static okhttp3.Response playlist(okhttp3.Response response) throws java.io.IOException {
+        okhttp3.ResponseBody raw = response.body();
+        if (raw == null) {
+            return response;
+        }
+        String path = response.request().url().encodedPath().toLowerCase(java.util.Locale.ROOT);
+        if (!path.endsWith(".m3u8")) {
+            return response;
+        }
+        okio.BufferedSource source = raw.source();
+        if (!source.request(2)) {
+            return response;
+        }
+        okio.BufferedSource prefix = source.peek();
+        if (prefix.readByte() != (byte) 0x1f || prefix.readByte() != (byte) 0x8b) {
+            return response;
+        }
+        okhttp3.ResponseBody body = okhttp3.ResponseBody.create(
+                raw.contentType(),
+                -1,
+                okio.Okio.buffer(new okio.GzipSource(source)));
+        return response.newBuilder()
+                .code(200)
+                .message("OK")
+                .removeHeader("Content-Encoding")
+                .removeHeader("Content-Length")
+                .removeHeader("Content-Range")
+                .body(body)
+                .build();
+    }
+
+    private static final okhttp3.OkHttpClient PROBE = new okhttp3.OkHttpClient();
+    private static final java.util.concurrent.ConcurrentHashMap<String, Long> BILI_SIZE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Two-byte probe. The length is the total in {@code Content-Range}. */
+    private static long biliDocumentSize(okhttp3.Request request) {
+        String key = request.url().toString();
+        Long cached = BILI_SIZE.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        okhttp3.Request probe = request.newBuilder().header("Range", "bytes=0-1").build();
+        try (okhttp3.Response response = PROBE.newCall(probe).execute()) {
+            long size = Bili.documentSize(response.header("Content-Range"));
+            if (size > 0) {
+                BILI_SIZE.put(key, size);
+            }
+            return size;
+        } catch (java.io.IOException e) {
+            return -1;
+        }
+    }
+
+    private static final class Referer implements androidx.media3.datasource.DataSource {
+        private final androidx.media3.datasource.HttpDataSource inner;
+
+        Referer(androidx.media3.datasource.HttpDataSource inner) {
             this.inner = inner;
         }
 

@@ -154,6 +154,49 @@ public final class Prose {
         return pick(words, timeMs);
     }
 
+    /**
+     * The clause that contains [{@code start}, {@code end}). A comma, semicolon,
+     * colon, or sentence stop ends it, and that mark is included.
+     */
+    public static int[] phraseAround(String text, int start, int end) {
+        if (text == null || start < 0 || end <= start || end > text.length()) {
+            return NONE;
+        }
+        int left = start;
+        while (left > 0) {
+            int cp = Character.codePointBefore(text, left);
+            if (isClauseBreak(cp)) {
+                break;
+            }
+            left -= Character.charCount(cp);
+        }
+        while (left < end) {
+            int cp = Character.codePointAt(text, left);
+            if (!Character.isWhitespace(cp)) {
+                break;
+            }
+            left += Character.charCount(cp);
+        }
+        int right = end;
+        while (right < text.length()) {
+            int cp = Character.codePointAt(text, right);
+            right += Character.charCount(cp);
+            if (isClauseBreak(cp)) {
+                break;
+            }
+        }
+        if (left >= right) {
+            return new int[] {start, end};
+        }
+        return new int[] {left, right};
+    }
+
+    private static boolean isClauseBreak(int cp) {
+        return cp == '.' || cp == '!' || cp == '?' || cp == ',' || cp == ';' || cp == ':'
+                || cp == '…' || cp == '。' || cp == '！' || cp == '？'
+                || cp == '，' || cp == '、' || cp == '；' || cp == '：';
+    }
+
     private static final int[] NONE = {-1, -1};
 
     /** Words in [from, to). Each entry is start, end, t0, t1. */

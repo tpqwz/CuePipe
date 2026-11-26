@@ -120,6 +120,7 @@ public final class Shelf {
                     + "play_url TEXT NOT NULL,"
                     + "local_path TEXT NOT NULL DEFAULT '',"
                     + "thumb TEXT NOT NULL DEFAULT '',"
+                    + "place_ms INTEGER NOT NULL DEFAULT 0,"
                     + "UNIQUE(service, key))",
             "CREATE TABLE track ("
                     + "id INTEGER PRIMARY KEY,"
@@ -228,8 +229,17 @@ public final class Shelf {
         return videoId;
     }
 
-    /** Appends one track to a video already on the shelf and rebuilds the index. */
+    /** Adds one track. A second read with the same source and label replaces the first. */
     public static void addTrack(Sql db, long videoId, TrackIn track) {
+        String old = db.text(
+                "SELECT id FROM track WHERE video_id=? AND source=? AND label=? ORDER BY id DESC LIMIT 1",
+                videoId, track.source, track.label);
+        if (old != null) {
+            db.exec("DELETE FROM vec WHERE track_id=?", old);
+            db.exec("DELETE FROM span WHERE track_id=?", old);
+            db.exec("DELETE FROM docs WHERE docid=?", old);
+            db.exec("DELETE FROM track WHERE id=?", old);
+        }
         db.exec("INSERT INTO track(video_id, lang, source, label) VALUES(?,?,?,?)",
                 videoId, track.lang, track.source, track.label);
         long trackId = db.num("SELECT last_insert_rowid()");
@@ -593,12 +603,40 @@ public final class Shelf {
     }
 
     public static boolean known(Sql db, String url) {
-        return db.text("SELECT id FROM video WHERE url=?", url) != null;
+        if (url == null || url.isEmpty()) {
+            return false;
+        }
+        return db.text(
+                "SELECT id FROM video WHERE url=? OR key=? OR play_url=? LIMIT 1",
+                url, url, url) != null;
     }
 
     public static String localPath(Sql db, long videoId) {
         String path = db.text("SELECT local_path FROM video WHERE id=?", videoId);
         return path == null ? "" : path;
+    }
+
+    /** Where playback last was, in milliseconds. 0 means the start. */
+    public static int place(Sql db, long videoId) {
+        return (int) db.num("SELECT place_ms FROM video WHERE id=?", videoId);
+    }
+
+    public static void remember(Sql db, long videoId, int ms) {
+        db.exec("UPDATE video SET place_ms=? WHERE id=?", Math.max(ms, 0), videoId);
+    }
+
+    /**
+     * The place worth storing. {@code -1} leaves the stored place alone, so the
+     * opening moments do not wipe a resume point. Near the end, store 0.
+     */
+    public static int keptPlace(int positionMs, int durationMs) {
+        if (positionMs < 3000) {
+            return -1;
+        }
+        if (durationMs > 0 && durationMs - positionMs < 4000) {
+            return 0;
+        }
+        return positionMs;
     }
 
     public static void setLocalPath(Sql db, long videoId, String path) {
@@ -642,7 +680,7 @@ public final class Shelf {
 
     private static final class Db extends SQLiteOpenHelper {
         Db(Context context) {
-            super(context, "cuepipe.db", null, 8);
+            super(context, "cuepipe.db", null, 9);
         }
 
         @Override
@@ -675,6 +713,9 @@ public final class Shelf {
             }
             if (oldVersion < 8) {
                 db.execSQL(EXCERPT_SQL);
+            }
+            if (oldVersion < 9) {
+                db.execSQL("ALTER TABLE video ADD COLUMN place_ms INTEGER NOT NULL DEFAULT 0");
             }
             if (oldVersion < 6) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS vec ("

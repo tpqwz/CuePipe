@@ -67,6 +67,9 @@ public final class Odysee {
 
     /** A watch link becomes an {@code lbry://} URI. A channel-only link returns null. */
     public static String videoUri(String url) {
+        if (!odyseeHost(url)) {
+            return null;
+        }
         String path = path(url);
         if (path.isEmpty() || !path.contains("/")) {
             return null;
@@ -177,6 +180,29 @@ public final class Odysee {
             }
         }
         return false;
+    }
+
+    /** A slash path on another site is not a claim. That open used to fail as "no video". */
+    private static boolean odyseeHost(String url) {
+        String host = host(url);
+        return host.equals("odysee.com") || host.endsWith(".odysee.com");
+    }
+
+    private static String host(String url) {
+        if (url == null) {
+            return "";
+        }
+        int scheme = url.indexOf("://");
+        int start = scheme < 0 ? 0 : scheme + 3;
+        int end = url.length();
+        for (int i = start; i < url.length(); i++) {
+            char c = url.charAt(i);
+            if (c == '/' || c == '?' || c == '#' || c == ':') {
+                end = i;
+                break;
+            }
+        }
+        return url.substring(start, end).toLowerCase(Locale.ROOT);
     }
 
     private static String path(String url) {

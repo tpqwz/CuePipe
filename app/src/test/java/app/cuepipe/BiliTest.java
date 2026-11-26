@@ -5,10 +5,25 @@ import org.junit.Test;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public final class BiliTest {
+    @Test
+    public void anOpenBilibiliRangeClosesOnTheLastByte() {
+        assertTrue(Bili.cdnHost("upos-hz-mirrorakam.akamaized.net", "/upgcxcode/1.m4s"));
+        assertTrue(Bili.cdnHost("upos-sz-mirrorcosov.bilivideo.com", "/a.m4s"));
+        assertFalse(Bili.cdnHost("nasaplus.akamaized.net", "/output/1.m3u8"));
+        assertFalse(Bili.cdnHost("player.odycdn.com", "/v6/streams/a/b.mp4"));
+        assertEquals(59552563L, Bili.documentSize("bytes 0-1/59552563"));
+        assertEquals(-1L, Bili.documentSize("bytes */*"));
+        assertEquals("bytes=0-59552562", Bili.closedRange(null, 59552563L));
+        assertEquals("bytes=1000-59552562", Bili.closedRange("bytes=1000-", 59552563L));
+        assertEquals("bytes=0-32", Bili.closedRange("bytes=0-32", 59552563L));
+        assertNull(Bili.closedRange(null, -1));
+    }
+
     @Test
     public void aWatchLinkIsTheBvidAndASpaceLinkIsTheMid() {
         assertEquals("BV1kZWX62ENY",
