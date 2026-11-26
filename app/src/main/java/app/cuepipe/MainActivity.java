@@ -139,6 +139,8 @@ public final class MainActivity extends AppCompatActivity {
     private boolean rssPanel;
     /** More shares the saved feeds instead of turning a page. */
     private boolean shareCollection;
+    /** A shared note is opening, so the first service selection must not load Home. */
+    private boolean sharedOpen;
     /** Enclosure URL to the feed it came from. */
     private final Map<String, String> feedOf = new HashMap<>();
     private final Runnable playTick = new Runnable() {
@@ -477,12 +479,41 @@ public final class MainActivity extends AppCompatActivity {
             fillServices();
             reloadLibrary();
         }
+        sharedOpen = feedNote(getIntent());
         fillExploreServices();
-        if (Shelf.latest(db) != null) {
+        if (sharedOpen) {
+            takeShared(getIntent());
+        } else if (Shelf.latest(db) != null) {
             showTab(1);
         } else {
             showTab(0);
             loadFeed();
+        }
+    }
+
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        takeShared(intent);
+    }
+
+    private static boolean feedNote(android.content.Intent intent) {
+        if (intent == null || !android.content.Intent.ACTION_SEND.equals(intent.getAction())) {
+            return false;
+        }
+        CharSequence extra = intent.getCharSequenceExtra(android.content.Intent.EXTRA_TEXT);
+        if (extra == null) {
+            return false;
+        }
+        String note = extra.toString();
+        return note.contains("<opml") || note.contains("xmlUrl=");
+    }
+
+    /** A chat or a note shared into CuePipe. An OPML note restores the feeds. */
+    private void takeShared(android.content.Intent intent) {
+        if (feedNote(intent)) {
+            restoreFeeds(intent.getCharSequenceExtra(android.content.Intent.EXTRA_TEXT).toString());
         }
     }
 
@@ -2227,7 +2258,14 @@ public final class MainActivity extends AppCompatActivity {
         exploreService.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (!filling && exploreQuery.getText().toString().trim().isEmpty()
+                if (filling) {
+                    return;
+                }
+                if (sharedOpen) {
+                    sharedOpen = false;
+                    return;
+                }
+                if (exploreQuery.getText().toString().trim().isEmpty()
                         && !videoOpen && section == 0) {
                     loadFeed();
                 }
